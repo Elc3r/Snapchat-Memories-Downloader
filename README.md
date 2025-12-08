@@ -8,7 +8,7 @@ services. This tool runs entirely on your computer, preserving all metadata
 
 **Two ways to use:**
 
-1. **🌐 [Web Version](https://andrefecto.github.io/snapchat-memories-downloader/)**
+1. **🌐 [Web Version](https://andrefecto.github.io/Snapchat-Memories-Downloader/)**
    - Upload your HTML file in browser (100% private, client-side)
 2. **🐍 Python Script** - Command-line tool for local processing
    (instructions below)
@@ -68,7 +68,7 @@ but are now separate options at the bottom of the list.
 
 ## 🌐 Web Version (Easiest)
 
-Visit the [web version](https://andrefecto.github.io/snapchat-memories-downloader/)
+Visit the [web version](https://andrefecto.github.io/Snapchat-Memories-Downloader/)
 and upload your `memories_history.html` file. Everything runs in your browser -
 your data never leaves your device!
 
@@ -307,7 +307,7 @@ and resume at any time!
 3. Add your GitHub repository as remote:
 
    ```bash
-   git remote add origin https://github.com/andrefecto/snapchat-memories-downloader.git
+   git remote add origin https://github.com/andrefecto/Snapchat-Memories-Downloader.git
    git branch -M main
    git push -u origin main
    ```
@@ -320,7 +320,7 @@ and resume at any time!
 4. Choose branch: **main** and folder: **/docs**
 5. Click **Save**
 6. Your web version will be live at:
-   `https://andrefecto.github.io/snapchat-memories-downloader/`
+   `https://andrefecto.github.io/Snapchat-Memories-Downloader/`
 
 ### Automated Dependency Updates
 
