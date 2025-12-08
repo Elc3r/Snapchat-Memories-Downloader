@@ -57,6 +57,7 @@
     </script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/piexifjs@1.0.6/piexif.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -499,6 +500,119 @@
         let zip = null;
 
         /**
+         * Parse Snapchat date string to JavaScript Date object
+         * Format: "2025-11-30 00:31:09 UTC"
+         */
+        function parseSnapchatDate(dateStr) {
+            try {
+                // Remove " UTC" suffix and parse
+                const dateStrClean = dateStr.replace(' UTC', '');
+                return new Date(dateStrClean + 'Z'); // Add Z to indicate UTC
+            } catch (error) {
+                console.warn('Could not parse date:', dateStr, error);
+                return new Date(); // Fallback to current date
+            }
+        }
+
+        /**
+         * Convert decimal degrees to degrees, minutes, seconds for EXIF
+         */
+        function decimalToDMS(decimal) {
+            const absolute = Math.abs(decimal);
+            const degrees = Math.floor(absolute);
+            const minutesDecimal = (absolute - degrees) * 60;
+            const minutes = Math.floor(minutesDecimal);
+            const seconds = (minutesDecimal - minutes) * 60;
+
+            return [
+                [degrees, 1],
+                [minutes, 1],
+                [Math.round(seconds * 100), 100]
+            ];
+        }
+
+        /**
+         * Add EXIF metadata (GPS and date) to JPEG image
+         * @param {ArrayBuffer} imageData - Image data
+         * @param {string} dateStr - Date string from Snapchat
+         * @param {string} latitude - Latitude as string
+         * @param {string} longitude - Longitude as string
+         * @returns {Promise<ArrayBuffer>} - Image with EXIF metadata
+         */
+        async function addExifMetadata(imageData, dateStr, latitude, longitude) {
+            if (typeof piexif === 'undefined') {
+                console.warn('piexif library not loaded, skipping EXIF metadata');
+                return imageData;
+            }
+
+            try {
+                // Convert ArrayBuffer to base64 for piexif
+                const uint8Array = new Uint8Array(imageData);
+                let binary = '';
+                for (let i = 0; i < uint8Array.byteLength; i++) {
+                    binary += String.fromCharCode(uint8Array[i]);
+                }
+                const base64 = btoa(binary);
+                const dataUrl = 'data:image/jpeg;base64,' + base64;
+
+                // Create EXIF object
+                const exifObj = { "0th": {}, "Exif": {}, "GPS": {} };
+
+                // Add date/time
+                if (dateStr && dateStr !== 'Unknown') {
+                    try {
+                        const date = parseSnapchatDate(dateStr);
+                        const exifDate = date.getFullYear() + ':' +
+                            String(date.getMonth() + 1).padStart(2, '0') + ':' +
+                            String(date.getDate()).padStart(2, '0') + ' ' +
+                            String(date.getHours()).padStart(2, '0') + ':' +
+                            String(date.getMinutes()).padStart(2, '0') + ':' +
+                            String(date.getSeconds()).padStart(2, '0');
+
+                        exifObj["Exif"][piexif.ExifIFD.DateTimeOriginal] = exifDate;
+                        exifObj["Exif"][piexif.ExifIFD.DateTimeDigitized] = exifDate;
+                        exifObj["0th"][piexif.ImageIFD.DateTime] = exifDate;
+                    } catch (e) {
+                        console.warn('Could not parse date for EXIF:', e);
+                    }
+                }
+
+                // Add GPS coordinates
+                if (latitude && longitude && latitude !== 'Unknown' && longitude !== 'Unknown') {
+                    const lat = parseFloat(latitude);
+                    const lon = parseFloat(longitude);
+
+                    if (!isNaN(lat) && !isNaN(lon)) {
+                        // Latitude
+                        exifObj["GPS"][piexif.GPSIFD.GPSLatitude] = decimalToDMS(lat);
+                        exifObj["GPS"][piexif.GPSIFD.GPSLatitudeRef] = lat >= 0 ? 'N' : 'S';
+
+                        // Longitude
+                        exifObj["GPS"][piexif.GPSIFD.GPSLongitude] = decimalToDMS(lon);
+                        exifObj["GPS"][piexif.GPSIFD.GPSLongitudeRef] = lon >= 0 ? 'E' : 'W';
+                    }
+                }
+
+                // Insert EXIF into image
+                const exifBytes = piexif.dump(exifObj);
+                const newDataUrl = piexif.insert(exifBytes, dataUrl);
+
+                // Convert back to ArrayBuffer
+                const newBase64 = newDataUrl.split(',')[1];
+                const newBinary = atob(newBase64);
+                const newUint8Array = new Uint8Array(newBinary.length);
+                for (let i = 0; i < newBinary.length; i++) {
+                    newUint8Array[i] = newBinary.charCodeAt(i);
+                }
+
+                return newUint8Array.buffer;
+            } catch (error) {
+                console.warn('Could not add EXIF metadata:', error);
+                return imageData;
+            }
+        }
+
+        /**
          * Merge overlay image on top of main image using Canvas API
          * @param {ArrayBuffer} mainData - Main image data
          * @param {ArrayBuffer} overlayData - Overlay image data
@@ -791,10 +905,21 @@
 
                                 if (mainData && overlayData) {
                                     // Merge the images
-                                    const mergedData = await mergeImageOverlay(mainData, overlayData);
+                                    let mergedData = await mergeImageOverlay(mainData, overlayData);
+
+                                    // Add EXIF metadata to merged image
+                                    mergedData = await addExifMetadata(
+                                        mergedData,
+                                        metadata.date,
+                                        metadata.latitude,
+                                        metadata.longitude
+                                    );
+
                                     const filename = `${fileNum}${extension}`;
 
-                                    zip.file(filename, mergedData);
+                                    // Add to ZIP with original date
+                                    const fileDate = parseSnapchatDate(metadata.date);
+                                    zip.file(filename, mergedData, { date: fileDate });
                                     metadata.files.push({
                                         path: filename,
                                         size: mergedData.byteLength,
@@ -807,14 +932,25 @@
                             } catch (error) {
                                 addLog(`  Warning: Failed to merge overlay (${error.message}), saving separately`, 'info');
                                 // Fall back to saving separately
+                                const fileDate = parseSnapchatDate(metadata.date);
                                 for (const filename of files) {
-                                    const fileData = await innerZip.files[filename].async('arraybuffer');
+                                    let fileData = await innerZip.files[filename].async('arraybuffer');
                                     const isOverlay = filename.toLowerCase().includes('-overlay');
                                     const newFilename = isOverlay
                                         ? `${fileNum}-overlay${extension}`
                                         : `${fileNum}-main${extension}`;
 
-                                    zip.file(newFilename, fileData);
+                                    // Add EXIF metadata to images
+                                    if (metadata.media_type === 'Image') {
+                                        fileData = await addExifMetadata(
+                                            fileData,
+                                            metadata.date,
+                                            metadata.latitude,
+                                            metadata.longitude
+                                        );
+                                    }
+
+                                    zip.file(newFilename, fileData, { date: fileDate });
                                     metadata.files.push({
                                         path: newFilename,
                                         size: fileData.byteLength,
@@ -825,14 +961,25 @@
                             }
                         } else {
                             // Save files separately (not merging, or is video, or no overlay)
+                            const fileDate = parseSnapchatDate(metadata.date);
                             for (const filename of files) {
-                                const fileData = await innerZip.files[filename].async('arraybuffer');
+                                let fileData = await innerZip.files[filename].async('arraybuffer');
                                 const isOverlay = filename.toLowerCase().includes('-overlay');
                                 const newFilename = isOverlay
                                     ? `${fileNum}-overlay${extension}`
                                     : `${fileNum}-main${extension}`;
 
-                                zip.file(newFilename, fileData);
+                                // Add EXIF metadata to images
+                                if (metadata.media_type === 'Image') {
+                                    fileData = await addExifMetadata(
+                                        fileData,
+                                        metadata.date,
+                                        metadata.latitude,
+                                        metadata.longitude
+                                    );
+                                }
+
+                                zip.file(newFilename, fileData, { date: fileDate });
                                 metadata.files.push({
                                     path: newFilename,
                                     size: fileData.byteLength,
@@ -843,8 +990,21 @@
                         }
                     } else {
                         // Regular file
+                        let fileData = arrayBuffer;
                         const filename = `${fileNum}${extension}`;
-                        zip.file(filename, arrayBuffer);
+                        const fileDate = parseSnapchatDate(metadata.date);
+
+                        // Add EXIF metadata to images
+                        if (metadata.media_type === 'Image') {
+                            fileData = await addExifMetadata(
+                                fileData,
+                                metadata.date,
+                                metadata.latitude,
+                                metadata.longitude
+                            );
+                        }
+
+                        zip.file(filename, fileData, { date: fileDate });
                         metadata.files.push({
                             path: filename,
                             size: arrayBuffer.byteLength,

@@ -57,7 +57,8 @@ but are now separate options at the bottom of the list.
 - Downloads all memories from `memories_history.html`
 - Sequential naming: `01.jpg`, `02.mp4`, `03.jpg`, etc.
 - **Preserves ALL metadata**: dates, GPS coordinates, media type
-- **Sets file timestamps to match original capture date** (Python only)
+- **Embeds EXIF metadata into images** - GPS coordinates and dates show up in Photos apps
+- **Sets file timestamps to match original capture date**
 - Handles ZIP files with overlays (extracts to `-main` and `-overlay` files)
 - **Optional overlay merging** - Combine overlay on top of main image (images only)
 - Saves complete `metadata.json` with all information
@@ -238,7 +239,8 @@ For merged overlays (when using `--merge-overlays` flag):
 
 - Python 3.7+
 - `requests` library (installed automatically by setup.sh)
-- `Pillow` library (required for `--merge-overlays` flag, installed automatically by setup.sh)
+- `Pillow` library (for overlay merging and EXIF metadata, installed automatically by setup.sh)
+- `piexif` library (for EXIF metadata embedding, installed automatically by setup.sh)
 
 ## File Structure
 

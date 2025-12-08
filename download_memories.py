@@ -28,6 +28,13 @@ except ImportError:
     print("Install with: pip install -r requirements.txt")
     Image = None
 
+try:
+    import piexif
+except ImportError:
+    print("Warning: piexif not found. EXIF metadata writing will be disabled.")
+    print("Install with: pip install -r requirements.txt")
+    piexif = None
+
 
 class MemoriesParser(HTMLParser):
     """Parse Snapchat memories_history.html to extract memory data."""
@@ -106,6 +113,90 @@ def is_zip_file(content: bytes) -> bool:
     return content[:2] == b'PK'
 
 
+def decimal_to_dms(decimal: float, is_latitude: bool) -> tuple:
+    """
+    Convert decimal coordinates to degrees, minutes, seconds format for EXIF.
+    Returns: ((degrees, 1), (minutes, 1), (seconds, 100))
+    """
+    is_positive = decimal >= 0
+    decimal = abs(decimal)
+
+    degrees = int(decimal)
+    minutes_decimal = (decimal - degrees) * 60
+    minutes = int(minutes_decimal)
+    seconds = (minutes_decimal - minutes) * 60
+
+    # EXIF uses rational numbers (numerator, denominator)
+    # Multiply seconds by 100 to preserve precision
+    return (
+        (degrees, 1),
+        (minutes, 1),
+        (int(seconds * 100), 100)
+    )
+
+
+def add_exif_metadata(
+    image_data: bytes,
+    date_str: str,
+    latitude: str,
+    longitude: str
+) -> bytes:
+    """
+    Add EXIF metadata (GPS and date) to JPEG image data.
+    Returns new image data with EXIF embedded.
+    """
+    if piexif is None or Image is None:
+        return image_data
+
+    try:
+        # Parse coordinates
+        lat = float(latitude) if latitude != 'Unknown' else None
+        lon = float(longitude) if longitude != 'Unknown' else None
+
+        # Load image
+        img = Image.open(io.BytesIO(image_data))
+
+        # Create EXIF dict
+        exif_dict = {"0th": {}, "Exif": {}, "GPS": {}}
+
+        # Add date/time
+        if date_str and date_str != 'Unknown':
+            # Parse Snapchat date: "2025-11-30 00:31:09 UTC"
+            date_clean = date_str.replace(' UTC', '')
+            try:
+                dt = datetime.strptime(date_clean, '%Y-%m-%d %H:%M:%S')
+                exif_date = dt.strftime('%Y:%m:%d %H:%M:%S')
+                exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = exif_date.encode()
+                exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = exif_date.encode()
+                exif_dict["0th"][piexif.ImageIFD.DateTime] = exif_date.encode()
+            except ValueError:
+                pass
+
+        # Add GPS coordinates
+        if lat is not None and lon is not None:
+            # GPS latitude
+            lat_dms = decimal_to_dms(lat, True)
+            exif_dict["GPS"][piexif.GPSIFD.GPSLatitude] = lat_dms
+            exif_dict["GPS"][piexif.GPSIFD.GPSLatitudeRef] = b'N' if lat >= 0 else b'S'
+
+            # GPS longitude
+            lon_dms = decimal_to_dms(lon, False)
+            exif_dict["GPS"][piexif.GPSIFD.GPSLongitude] = lon_dms
+            exif_dict["GPS"][piexif.GPSIFD.GPSLongitudeRef] = b'E' if lon >= 0 else b'W'
+
+        # Convert to bytes
+        exif_bytes = piexif.dump(exif_dict)
+
+        # Save image with EXIF
+        output = io.BytesIO()
+        img.save(output, format='JPEG', quality=95, exif=exif_bytes)
+        return output.getvalue()
+
+    except Exception as e:
+        print(f"    Warning: Could not add EXIF metadata: {e}")
+        return image_data
+
+
 def merge_image_overlay(main_data: bytes, overlay_data: bytes) -> bytes:
     """Merge overlay image on top of main image using PIL."""
     if Image is None:
@@ -141,10 +232,14 @@ def download_and_extract(
     base_path: Path,
     file_num: str,
     extension: str,
-    merge_overlays: bool = False
+    merge_overlays: bool = False,
+    date_str: str = 'Unknown',
+    latitude: str = 'Unknown',
+    longitude: str = 'Unknown'
 ) -> list:
     """
     Download a file from URL. If it's a ZIP with overlay, extract and optionally merge.
+    Adds EXIF metadata (GPS and date) to images.
     Returns list of dicts with file info: [{'path': path, 'size': size, 'type': 'main'/'overlay'/'merged'}]
     """
     headers = {
@@ -188,6 +283,10 @@ def download_and_extract(
                     try:
                         # Merge the images
                         merged_data = merge_image_overlay(main_file, overlay_file)
+
+                        # Add EXIF metadata to merged image
+                        merged_data = add_exif_metadata(merged_data, date_str, latitude, longitude)
+
                         output_filename = f"{file_num}{extension}"
                         output_path = base_path / output_filename
 
@@ -213,6 +312,11 @@ def download_and_extract(
                     else:
                         output_filename = f"{file_num}-main{extension}"
 
+                    # Add EXIF metadata to images
+                    is_image = extension.lower() in ['.jpg', '.jpeg', '.png']
+                    if is_image:
+                        file_data = add_exif_metadata(file_data, date_str, latitude, longitude)
+
                     output_path = base_path / output_filename
 
                     with open(output_path, 'wb') as f:
@@ -228,6 +332,11 @@ def download_and_extract(
         # Not a ZIP - save as regular file
         output_filename = f"{file_num}{extension}"
         output_path = base_path / output_filename
+
+        # Add EXIF metadata to images
+        is_image = extension.lower() in ['.jpg', '.jpeg', '.png']
+        if is_image:
+            content = add_exif_metadata(content, date_str, latitude, longitude)
 
         with open(output_path, 'wb') as f:
             f.write(content)
@@ -388,7 +497,8 @@ def download_all_memories(
         try:
             # Download and extract file(s)
             files_saved = download_and_extract(
-                memory['url'], output_path, file_num, extension, merge_overlays
+                memory['url'], output_path, file_num, extension, merge_overlays,
+                metadata['date'], metadata['latitude'], metadata['longitude']
             )
 
             # Display what was downloaded
@@ -499,7 +609,8 @@ if __name__ == '__main__':
 
             try:
                 files_saved = download_and_extract(
-                    memory['url'], output_path, file_num, extension, merge_overlays_mode
+                    memory['url'], output_path, file_num, extension, merge_overlays_mode,
+                    metadata['date'], metadata['latitude'], metadata['longitude']
                 )
 
                 if len(files_saved) > 1:
