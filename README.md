@@ -2,10 +2,9 @@
 
 **⚠️ Save your memories before Snapchat starts charging for storage!**
 
-Download ALL your Snapchat memories completely FREE - don't pay $15 to
-ExportSnaps or other services. This tool runs entirely on your computer,
-preserving all metadata (dates, GPS locations) while keeping your data 100%
-private.
+Download ALL your Snapchat memories completely FREE - don't pay for paid
+services. This tool runs entirely on your computer, preserving all metadata
+(dates, GPS locations) while keeping your data 100% private.
 
 **Two ways to use:**
 
@@ -42,7 +41,7 @@ but are now separate options at the bottom of the list.
 
 ### 💰 Don't Pay for What Should Be Free
 
-- **100% FREE** - ExportSnaps charges $15. This costs nothing.
+- **100% FREE** - Other services charge money. This costs nothing.
 - **Save Before Fees** - Download now before Snapchat implements storage charges
 - **Open Source** - Inspect the code yourself on GitHub
 
@@ -60,6 +59,7 @@ but are now separate options at the bottom of the list.
 - **Preserves ALL metadata**: dates, GPS coordinates, media type
 - **Sets file timestamps to match original capture date** (Python only)
 - Handles ZIP files with overlays (extracts to `-main` and `-overlay` files)
+- **Optional overlay merging** - Combine overlay on top of main image (images only)
 - Saves complete `metadata.json` with all information
 - **Resume/Retry support** - Pick up where you left off or retry failed downloads
 - Incremental metadata updates - Track download progress in real-time
@@ -71,6 +71,9 @@ but are now separate options at the bottom of the list.
 Visit the [web version](https://andrefecto.github.io/snapchat-memories-downloader/)
 and upload your `memories_history.html` file. Everything runs in your browser -
 your data never leaves your device!
+
+Check the "Merge overlays" option to combine overlay images with their main images
+(images only - videos will remain separate).
 
 ### Resume/Retry
 
@@ -137,6 +140,16 @@ To retry only the failed downloads:
 python download_memories.py --retry-failed
 ```
 
+### Merge Overlays
+
+To merge overlay files on top of main files (images only):
+
+```bash
+python download_memories.py --merge-overlays
+```
+
+This will composite the `-overlay` image on top of the `-main` image and save only the merged result. Videos are not merged and will remain as separate files.
+
 ### Deactivate Virtual Environment
 
 ```bash
@@ -174,7 +187,7 @@ A `metadata.json` file is created with information about each memory:
 }
 ```
 
-For memories with overlays:
+For memories with overlays (not merged):
 
 ```json
 {
@@ -200,10 +213,32 @@ For memories with overlays:
 }
 ```
 
+For merged overlays (when using `--merge-overlays` flag):
+
+```json
+{
+  "number": 42,
+  "date": "2024-06-15 14:30:00 UTC",
+  "media_type": "Image",
+  "latitude": "40.7128",
+  "longitude": "-74.0060",
+  "url": "https://...",
+  "status": "success",
+  "files": [
+    {
+      "path": "42.jpg",
+      "size": 487932,
+      "type": "merged"
+    }
+  ]
+}
+```
+
 ## Requirements
 
 - Python 3.7+
 - `requests` library (installed automatically by setup.sh)
+- `Pillow` library (required for `--merge-overlays` flag, installed automatically by setup.sh)
 
 ## File Structure
 

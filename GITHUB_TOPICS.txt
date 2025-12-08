@@ -9,7 +9,6 @@ snapchat-downloader
 snapchat-backup
 snapchat-export
 free-alternative
-exportsnaps-alternative
 memory-backup
 photo-backup
 video-backup

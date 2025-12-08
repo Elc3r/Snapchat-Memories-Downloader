@@ -21,6 +21,13 @@ except ImportError:
     print("Please install it with: pip install -r requirements.txt")
     sys.exit(1)
 
+try:
+    from PIL import Image
+except ImportError:
+    print("Warning: Pillow not found. Overlay merging will be disabled.")
+    print("Install with: pip install -r requirements.txt")
+    Image = None
+
 
 class MemoriesParser(HTMLParser):
     """Parse Snapchat memories_history.html to extract memory data."""
@@ -99,10 +106,46 @@ def is_zip_file(content: bytes) -> bool:
     return content[:2] == b'PK'
 
 
-def download_and_extract(url: str, base_path: Path, file_num: str, extension: str) -> list:
+def merge_image_overlay(main_data: bytes, overlay_data: bytes) -> bytes:
+    """Merge overlay image on top of main image using PIL."""
+    if Image is None:
+        raise ImportError("Pillow is required for overlay merging")
+
+    # Load images
+    main_img = Image.open(io.BytesIO(main_data))
+    overlay_img = Image.open(io.BytesIO(overlay_data))
+
+    # Ensure overlay has alpha channel
+    if overlay_img.mode != 'RGBA':
+        overlay_img = overlay_img.convert('RGBA')
+
+    # Ensure main image is in RGB mode
+    if main_img.mode != 'RGB':
+        main_img = main_img.convert('RGB')
+
+    # Resize overlay to match main image if needed
+    if overlay_img.size != main_img.size:
+        overlay_img = overlay_img.resize(main_img.size, Image.Resampling.LANCZOS)
+
+    # Composite overlay onto main
+    main_img.paste(overlay_img, (0, 0), overlay_img)
+
+    # Save to bytes
+    output = io.BytesIO()
+    main_img.save(output, format='JPEG', quality=95)
+    return output.getvalue()
+
+
+def download_and_extract(
+    url: str,
+    base_path: Path,
+    file_num: str,
+    extension: str,
+    merge_overlays: bool = False
+) -> list:
     """
-    Download a file from URL. If it's a ZIP with overlay, extract both files.
-    Returns list of dicts with file info: [{'path': path, 'size': size, 'type': 'main'/'overlay'}]
+    Download a file from URL. If it's a ZIP with overlay, extract and optionally merge.
+    Returns list of dicts with file info: [{'path': path, 'size': size, 'type': 'main'/'overlay'/'merged'}]
     """
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
@@ -118,30 +161,68 @@ def download_and_extract(url: str, base_path: Path, file_num: str, extension: st
     if is_zip_file(content):
         # Extract ZIP contents
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            for zip_info in zf.namelist():
-                # Read file from zip
+            filenames = zf.namelist()
+
+            # Check if we have both main and overlay
+            has_overlay = any('-overlay' in f.lower() for f in filenames)
+            main_file = None
+            overlay_file = None
+
+            # Extract files
+            extracted_files = {}
+            for zip_info in filenames:
                 file_data = zf.read(zip_info)
-
-                # Determine if it's main or overlay based on filename
                 if '-overlay' in zip_info.lower():
-                    file_type = 'overlay'
-                    output_filename = f"{file_num}-overlay{extension}"
+                    overlay_file = file_data
+                    extracted_files['overlay'] = file_data
                 else:
-                    # Assume it's the main file
-                    file_type = 'main'
-                    output_filename = f"{file_num}-main{extension}"
+                    main_file = file_data
+                    extracted_files['main'] = file_data
 
-                output_path = base_path / output_filename
+            # If merge_overlays is True and we have both files
+            if merge_overlays and has_overlay and main_file and overlay_file:
+                # Only merge images (check extension)
+                is_image = extension.lower() in ['.jpg', '.jpeg', '.png']
 
-                # Save file
-                with open(output_path, 'wb') as f:
-                    f.write(file_data)
+                if is_image and Image is not None:
+                    try:
+                        # Merge the images
+                        merged_data = merge_image_overlay(main_file, overlay_file)
+                        output_filename = f"{file_num}{extension}"
+                        output_path = base_path / output_filename
 
-                files_saved.append({
-                    'path': output_filename,
-                    'size': len(file_data),
-                    'type': file_type
-                })
+                        with open(output_path, 'wb') as f:
+                            f.write(merged_data)
+
+                        files_saved.append({
+                            'path': output_filename,
+                            'size': len(merged_data),
+                            'type': 'merged'
+                        })
+                    except Exception as e:
+                        print(f"    Warning: Failed to merge overlay: {e}")
+                        print("    Saving separate files instead...")
+                        # Fall back to saving separately
+                        merge_overlays = False
+
+            # If not merging or merge failed, save separately
+            if not merge_overlays or not has_overlay or not is_image or Image is None:
+                for file_type, file_data in extracted_files.items():
+                    if file_type == 'overlay':
+                        output_filename = f"{file_num}-overlay{extension}"
+                    else:
+                        output_filename = f"{file_num}-main{extension}"
+
+                    output_path = base_path / output_filename
+
+                    with open(output_path, 'wb') as f:
+                        f.write(file_data)
+
+                    files_saved.append({
+                        'path': output_filename,
+                        'size': len(file_data),
+                        'type': file_type
+                    })
 
     else:
         # Not a ZIP - save as regular file
@@ -241,7 +322,8 @@ def download_all_memories(
     html_path: str,
     output_dir: str = 'memories',
     resume: bool = False,
-    retry_failed: bool = False
+    retry_failed: bool = False,
+    merge_overlays: bool = False
 ) -> None:
     """Download all memories with sequential naming and metadata preservation."""
 
@@ -305,7 +387,9 @@ def download_all_memories(
 
         try:
             # Download and extract file(s)
-            files_saved = download_and_extract(memory['url'], output_path, file_num, extension)
+            files_saved = download_and_extract(
+                memory['url'], output_path, file_num, extension, merge_overlays
+            )
 
             # Display what was downloaded
             if len(files_saved) > 1:
@@ -382,6 +466,7 @@ if __name__ == '__main__':
     resume_mode = '--resume' in sys.argv
     retry_failed_mode = '--retry-failed' in sys.argv
     test_mode = '--test' in sys.argv
+    merge_overlays_mode = '--merge-overlays' in sys.argv
 
     # Optional: limit number of downloads for testing
     # Pass --test to download only first 3 files
@@ -413,7 +498,9 @@ if __name__ == '__main__':
             print(f"  Location: {metadata['latitude']}, {metadata['longitude']}")
 
             try:
-                files_saved = download_and_extract(memory['url'], output_path, file_num, extension)
+                files_saved = download_and_extract(
+                    memory['url'], output_path, file_num, extension, merge_overlays_mode
+                )
 
                 if len(files_saved) > 1:
                     print(f"  ZIP extracted: {len(files_saved)} files")
@@ -450,4 +537,9 @@ if __name__ == '__main__':
 
         print("Test complete!")
     else:
-        download_all_memories(HTML_FILE, resume=resume_mode, retry_failed=retry_failed_mode)
+        download_all_memories(
+            HTML_FILE,
+            resume=resume_mode,
+            retry_failed=retry_failed_mode,
+            merge_overlays=merge_overlays_mode
+        )
