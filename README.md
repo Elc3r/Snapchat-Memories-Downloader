@@ -73,20 +73,24 @@ Visit the [web version](https://andrefecto.github.io/Snapchat-Memories-Downloade
 and upload your `memories_history.html` file. Everything runs in your browser -
 your data never leaves your device!
 
-Check the "Merge overlays" option to combine overlay images with their main images
-(images only - videos will remain separate).
+### Options
+
+- **Merge overlays**: Combine overlay images with their main images (images only - videos remain separate)
+- **Batch size**: Choose how many files per ZIP (50, 100, 200, or all in one)
+  - Batching helps with large collections and allows easier recovery if interrupted
+  - Each batch is downloaded as a separate ZIP: `snapchat-memories-batch-1.zip`, `snapchat-memories-batch-2.zip`, etc.
 
 ### Resume/Retry
 
 If your download gets interrupted or has failures:
 
-1. Extract the `metadata.json` file from your downloaded ZIP
+1. Extract the `metadata.json` file from any downloaded batch ZIP
 2. Go back to the web version
 3. Upload both `memories_history.html` AND `metadata.json`
 4. It will skip already-downloaded files and retry failed ones
 
-**Note:** The web version downloads everything as a ZIP file. File timestamps
-will be the download date, not the original capture date.
+**Note:** The web version sets timestamps within the ZIP file and embeds EXIF metadata into images
+(GPS and capture dates). When you extract the files, most modern extraction tools will preserve these timestamps.
 
 ---
 

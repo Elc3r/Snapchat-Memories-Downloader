@@ -404,6 +404,17 @@
                 </label>
                 <p style="color: #666; margin-top: 10px; font-size: 14px; margin-left: 28px;">Combine -main and -overlay files into a single image. Videos will remain separate.</p>
             </div>
+
+            <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #dee2e6;">
+                <label style="display: block; margin-bottom: 10px; font-size: 16px;"><strong>Batch Size</strong></label>
+                <select id="batchSizeSelect" style="padding: 8px; border: 2px solid #667eea; border-radius: 4px; font-size: 14px; width: 200px;">
+                    <option value="50">50 files per batch</option>
+                    <option value="100" selected>100 files per batch</option>
+                    <option value="200">200 files per batch</option>
+                    <option value="0">All in one ZIP</option>
+                </select>
+                <p style="color: #666; margin-top: 10px; font-size: 14px;">Downloads will be split into multiple ZIP files for easier recovery if interrupted.</p>
+            </div>
         </div>
 
         <div class="progress-container" id="progressContainer">
@@ -809,7 +820,6 @@
         }
 
         async function startDownload() {
-            zip = new JSZip();
             currentIndex = 0;
 
             // Initialize or use existing metadata
@@ -849,14 +859,58 @@
                 return;
             }
 
-            for (let count = 0; count < itemsToDownload.length; count++) {
-                const { metadata, index: i } = itemsToDownload[count];
+            // Get batch size
+            const batchSize = parseInt(document.getElementById('batchSizeSelect').value);
+            const useBatching = batchSize > 0;
+
+            if (useBatching) {
+                const numBatches = Math.ceil(itemsToDownload.length / batchSize);
+                addLog(`Will create ${numBatches} batch(es) of up to ${batchSize} files each`, 'info');
+
+                // Process in batches
+                for (let batchNum = 0; batchNum < numBatches; batchNum++) {
+                    const batchStart = batchNum * batchSize;
+                    const batchEnd = Math.min(batchStart + batchSize, itemsToDownload.length);
+                    const batchItems = itemsToDownload.slice(batchStart, batchEnd);
+
+                    addLog(`\nProcessing Batch ${batchNum + 1}/${numBatches} (${batchItems.length} items)`, 'info');
+
+                    await processBatch(batchItems, metadataList, batchNum + 1, batchStart, itemsToDownload.length);
+                }
+            } else {
+                // Process all at once
+                addLog('Processing all items in a single ZIP', 'info');
+                await processBatch(itemsToDownload, metadataList, 0, 0, itemsToDownload.length);
+            }
+
+            // Final summary
+            const successful = metadataList.filter(m => m.status === 'success').length;
+            const failed = metadataList.filter(m => m.status === 'failed').length;
+            const pending = metadataList.filter(m => m.status === 'pending').length;
+
+            addLog(`\n✓ Complete! ${successful} successful, ${failed} failed, ${pending} pending`, 'success');
+
+            if (failed > 0 || pending > 0) {
+                addLog(`Tip: Download metadata.json from any batch ZIP and re-upload it to retry failed/pending items`, 'info');
+            }
+
+            status.textContent = 'All downloads complete!';
+            progressFill.style.width = '100%';
+            progressFill.textContent = '100%';
+        }
+
+        async function processBatch(batchItems, metadataList, batchNum, globalStartIndex, totalItems) {
+            zip = new JSZip();
+
+            for (let count = 0; count < batchItems.length; count++) {
+                const { metadata, index: i } = batchItems[count];
                 const memory = memories[i];
                 const fileNum = String(metadata.number).padStart(2, '0');
                 const extension = metadata.media_type === 'Video' ? '.mp4' : '.jpg';
 
-                updateProgress(count + 1, itemsToDownload.length);
-                addLog(`[${count + 1}/${itemsToDownload.length}] #${metadata.number} ${metadata.date} - ${metadata.media_type}`, 'info');
+                const globalCount = globalStartIndex + count + 1;
+                updateProgress(globalCount, totalItems);
+                addLog(`[${globalCount}/${totalItems}] #${metadata.number} ${metadata.date} - ${metadata.media_type}`, 'info');
 
                 // Mark as in progress
                 metadata.status = 'in_progress';
@@ -1033,8 +1087,9 @@
             zip.file('metadata.json', JSON.stringify(metadataList, null, 2));
 
             // Generate and download ZIP
-            status.textContent = 'Creating ZIP file...';
-            addLog('Packaging files into ZIP...', 'info');
+            const batchLabel = batchNum > 0 ? ` (Batch ${batchNum})` : '';
+            status.textContent = `Creating ZIP file${batchLabel}...`;
+            addLog(`Packaging batch into ZIP...`, 'info');
 
             const zipBlob = await zip.generateAsync({ type: 'blob' }, (metadata) => {
                 const percent = Math.round(metadata.percent);
@@ -1046,29 +1101,20 @@
             const url = URL.createObjectURL(zipBlob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'snapchat-memories.zip';
+            a.download = batchNum > 0
+                ? `snapchat-memories-batch-${batchNum}.zip`
+                : 'snapchat-memories.zip';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
 
-            status.textContent = 'Complete! ZIP file downloaded.';
+            const zipFilename = batchNum > 0
+                ? `snapchat-memories-batch-${batchNum}.zip`
+                : 'snapchat-memories.zip';
+            addLog(`✓ Downloaded: ${zipFilename}`, 'success');
 
-            // Calculate statistics
-            const successful = metadataList.filter(m => m.status === 'success').length;
-            const failed = metadataList.filter(m => m.status === 'failed').length;
-            const pending = metadataList.filter(m => m.status === 'pending').length;
-
-            addLog(`Successfully processed ${itemsToDownload.length} items!`, 'success');
-            addLog(`Total: ${successful} successful, ${failed} failed, ${pending} pending`, 'info');
-            addLog(`Check your Downloads folder for snapchat-memories.zip`, 'success');
-
-            if (failed > 0 || pending > 0) {
-                addLog(`Tip: Download the metadata.json from the ZIP and re-upload it to retry failed/pending items`, 'info');
-            }
-
-            progressFill.style.width = '100%';
-            progressFill.textContent = '100%';
+            status.textContent = batchNum > 0 ? `Batch ${batchNum} complete` : 'Download complete';
         }
 
         function formatBytes(bytes) {
