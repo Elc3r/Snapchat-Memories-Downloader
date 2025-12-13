@@ -407,6 +407,41 @@ If this tool helped you recover your memories, consider [buying me a coffee](htt
 
 ---
 
+## 🔧 Troubleshooting
+
+### Videos Download as Blank/Black Files
+
+If your videos are downloading but show as blank or black when you try to play them:
+
+**Cause:** The download URLs from Snapchat may have expired, or the server is returning error pages instead of video files.
+
+**How to tell:**
+- The tool will now show warnings like: `WARNING: File may not be a valid video (invalid MP4 signature)`
+- Very small file sizes (under 100 bytes) indicate invalid files
+- The log will show the first bytes of the file to help diagnose the issue
+
+**Solutions:**
+1. **Request a fresh data export from Snapchat** - URLs expire after some time
+2. **Download sooner** - Process your Snapchat export as soon as you receive it
+3. **Check the warnings** - The tool will now alert you to potentially invalid files during download
+
+**Note:** The tool validates video files and warns you about potential issues, but it cannot fix expired or invalid URLs from Snapchat's servers.
+
+### FFmpeg Not Found (Python)
+
+If you see: `Warning: ffmpeg not found. Video overlay merging will be disabled.`
+
+**Solution:** Install FFmpeg:
+- **macOS**: `brew install ffmpeg`
+- **Ubuntu/Debian**: `sudo apt-get install ffmpeg`
+- **Windows**: `choco install ffmpeg` or download from [ffmpeg.org](https://ffmpeg.org/download.html)
+
+The tool will still work without FFmpeg - videos will be saved as separate `-main` and `-overlay` files.
+
+### Web Version: FFmpeg.wasm CORS Error
+
+If you see security/CORS errors in the browser console related to FFmpeg, this has been fixed in the latest version. Hard refresh the page: `Ctrl+Shift+R` (Windows/Linux) or `Cmd+Shift+R` (Mac).
+
 ## 📄 License
 
 MIT License - feel free to use and modify as needed.

@@ -339,6 +339,20 @@ def download_and_extract(
     content = response.content
     files_saved = []
 
+    # Validate downloaded content
+    if len(content) < 100:
+        print(f"    WARNING: Downloaded file is very small ({len(content)} bytes) - may be invalid or expired URL")
+
+    # For videos, check if it looks like a valid MP4 file
+    is_video = extension.lower() in ['.mp4', '.mov', '.avi']
+    if is_video and len(content) >= 8:
+        # Check for MP4 magic bytes (ftyp box)
+        # Valid MP4 files typically have 'ftyp' at bytes 4-8
+        if content[4:8] not in [b'ftyp', b'mdat', b'moov', b'wide']:
+            print(f"    WARNING: File may not be a valid video (invalid MP4 signature)")
+            print(f"    First 20 bytes: {content[:20]}")
+            print(f"    This might be an HTML error page or expired download link")
+
     # Check if it's a ZIP file
     if is_zip_file(content):
         # Extract ZIP contents

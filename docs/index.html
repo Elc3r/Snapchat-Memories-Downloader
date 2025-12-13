@@ -442,6 +442,26 @@
                 </select>
                 <p style="color: #666; margin-top: 10px; font-size: 14px;">Downloads will be split into multiple ZIP files for easier recovery if interrupted.</p>
             </div>
+
+            <div style="margin-top: 30px; text-align: center;">
+                <button id="startButton" style="
+                    display: none;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    border: none;
+                    padding: 15px 40px;
+                    font-size: 18px;
+                    font-weight: bold;
+                    border-radius: 8px;
+                    cursor: pointer;
+                    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+                    transition: transform 0.2s, box-shadow 0.2s;
+                " onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(102, 126, 234, 0.6)'"
+                   onmouseout="this.style.transform=''; this.style.boxShadow='0 4px 15px rgba(102, 126, 234, 0.4)'"
+                   onclick="handleStartDownload()">
+                    🚀 Start Download
+                </button>
+            </div>
         </div>
 
         <div class="progress-container" id="progressContainer">
@@ -527,6 +547,7 @@
         const uploadSection = document.getElementById('uploadSection');
         const fileName = document.getElementById('fileName');
         const metadataFileName = document.getElementById('metadataFileName');
+        const startButton = document.getElementById('startButton');
         const progressContainer = document.getElementById('progressContainer');
         const progressFill = document.getElementById('progressFill');
         const status = document.getElementById('status');
@@ -961,8 +982,18 @@
             }
 
             addLog(`Found ${memories.length} memories`, 'success');
+            addLog('Ready to download! Click the "Start Download" button when ready.', 'info');
+
+            // Show the start button
+            startButton.style.display = 'inline-block';
+        }
+
+        function handleStartDownload() {
+            // Hide the start button and show progress
+            startButton.style.display = 'none';
             progressContainer.style.display = 'block';
 
+            // Start the download
             startDownload();
         }
 
@@ -1085,9 +1116,26 @@
                     const blob = await response.blob();
                     const arrayBuffer = await blob.arrayBuffer();
 
+                    // Validate downloaded content
+                    if (arrayBuffer.byteLength < 100) {
+                        addLog(`    WARNING: Downloaded file is very small (${arrayBuffer.byteLength} bytes) - may be invalid or expired URL`, 'warning');
+                    }
+
                     // Check if it's a ZIP file (overlay content)
                     const uint8Array = new Uint8Array(arrayBuffer);
                     const isZip = uint8Array[0] === 0x50 && uint8Array[1] === 0x4B;
+
+                    // For videos, check if it looks like a valid MP4 file
+                    if (metadata.media_type === 'Video' && !isZip && arrayBuffer.byteLength >= 8) {
+                        // Check for MP4 magic bytes (ftyp box at bytes 4-8)
+                        const signature = String.fromCharCode(...uint8Array.slice(4, 8));
+                        const validSignatures = ['ftyp', 'mdat', 'moov', 'wide'];
+                        if (!validSignatures.includes(signature)) {
+                            addLog(`    WARNING: File may not be a valid video (invalid MP4 signature)`, 'warning');
+                            addLog(`    First bytes: ${Array.from(uint8Array.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`, 'warning');
+                            addLog(`    This might be an HTML error page or expired download link`, 'warning');
+                        }
+                    }
 
                     // Reset files array
                     metadata.files = [];
