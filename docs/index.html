@@ -226,6 +226,53 @@
       color: #666;
     }
 
+    .log-entry.warning {
+      color: #ffc107;
+    }
+
+    .log-entry.ffmpeg {
+      color: #6c757d;
+      font-size: 12px;
+    }
+
+    .log-tabs {
+      display: flex;
+      gap: 5px;
+      margin-bottom: 10px;
+      border-bottom: 2px solid #dee2e6;
+    }
+
+    .log-tab {
+      padding: 8px 16px;
+      background: #f8f9fa;
+      border: none;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      color: #666;
+      transition: all 0.2s;
+    }
+
+    .log-tab:hover {
+      background: #e9ecef;
+      color: #333;
+    }
+
+    .log-tab.active {
+      background: white;
+      color: #667eea;
+      border-bottom-color: #667eea;
+    }
+
+    .log-content {
+      display: none;
+    }
+
+    .log-content.active {
+      display: block;
+    }
+
     .features {
       margin-top: 40px;
       padding-top: 30px;
@@ -536,7 +583,7 @@
           <option value="0">All in one ZIP</option>
         </select>
         <p style="color: #666; margin-top: 10px; font-size: 14px">
-          Downloads will be split into multiple ZIP files. Smart batching processes videos in sub-batches of 10 to prevent memory issues.
+          Downloads will be split into multiple ZIP files. Videos with overlays are processed individually to prevent memory issues.
         </p>
       </div>
 
@@ -591,12 +638,24 @@
         <div class="progress-fill" id="progressFill">0%</div>
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-        <div style="color: #666; font-size: 14px; font-weight: 600;">Activity Log</div>
+        <div style="color: #666; font-size: 14px; font-weight: 600;">Activity Logs</div>
         <button id="copyLogsBtn" class="btn" style="padding: 6px 15px; font-size: 13px;" onclick="copyLogsToClipboard()">
           📋 Copy Logs
         </button>
       </div>
-      <div class="log" id="log"></div>
+
+      <div class="log-tabs">
+        <button class="log-tab active" onclick="switchLogTab('main')">Main Activity</button>
+        <button class="log-tab" onclick="switchLogTab('ffmpeg')">FFmpeg Details</button>
+      </div>
+
+      <div id="log-main" class="log-content active">
+        <div class="log" id="log"></div>
+      </div>
+
+      <div id="log-ffmpeg" class="log-content">
+        <div class="log" id="logFFmpeg"></div>
+      </div>
     </div>
 
     <div class="features">
@@ -706,18 +765,25 @@
         </p>
 
         <h3 style="margin-top: 20px; color: #667eea">
-          How does smart batching work?
+          How does individual video processing work?
         </h3>
         <p>
-          To prevent memory issues, the tool automatically processes items intelligently:
+          To ensure <strong>zero memory accumulation</strong>, the tool uses a smart download strategy:
         </p>
         <ul style="margin-left: 20px; margin-top: 5px;">
-          <li><strong>Images first:</strong> All images in the batch are processed first (they're small, ~5-10MB)</li>
-          <li><strong>Videos in sub-batches:</strong> Videos are processed in groups of 10 with garbage collection pauses between groups</li>
-          <li><strong>Memory management:</strong> FFmpeg automatically resets every 5 videos to prevent memory buildup</li>
+          <li><strong>Images:</strong> Processed normally and accumulate in a ZIP</li>
+          <li><strong>Videos with overlays:</strong> When encountered:
+            <ol style="margin-left: 20px; margin-top: 5px;">
+              <li>Current batch is downloaded immediately</li>
+              <li>Video is merged in isolation</li>
+              <li>Video gets its own dedicated ZIP file</li>
+              <li>Processing continues with next items</li>
+            </ol>
+          </li>
+          <li><strong>Result:</strong> Merged videos <strong>never</strong> accumulate in memory!</li>
         </ul>
         <p style="margin-top: 10px;">
-          This allows you to use larger batch sizes (50-100 files) without running out of memory, even with video merging enabled!
+          This means you can process 100+ items safely - you'll just get multiple ZIP files (images + individual videos).
         </p>
 
         <h3 style="margin-top: 20px; color: #667eea">
@@ -727,7 +793,7 @@
           If you encounter problems, please help us fix them by reporting the issue:
         </p>
         <ol style="margin-left: 20px; margin-top: 5px;">
-          <li>Click the <strong>"📋 Copy Logs"</strong> button above the activity log</li>
+          <li>Click the <strong>"📋 Copy Logs"</strong> button (copies both Main Activity and FFmpeg Details tabs)</li>
           <li>Go to the <a href="https://github.com/andrefecto/Snapchat-Memories-Downloader/issues" target="_blank" style="color: #667eea; font-weight: 600;">GitHub Issues page</a></li>
           <li>Create a new issue describing the problem</li>
           <li>Paste the copied logs into the issue</li>
@@ -849,19 +915,19 @@
       ffmpegInstance = new FFmpeg();
 
       addLog('  Loading FFmpeg.wasm (this may take a few seconds)...', 'info');
+      addLog('  💡 Check the "FFmpeg Details" tab for detailed conversion logs', 'info');
+      addLog('Loading FFmpeg.wasm...', 'info', 'ffmpeg');
       await ffmpegInstance.load({
         coreURL: new URL('./ffmpeg/ffmpeg-core.js', window.location).href,
         wasmURL: new URL('./ffmpeg/ffmpeg-core.wasm', window.location).href,
         worker: false
       });
 
-      // Log FFmpeg backend messages for debugging (less verbose now)
+      // Log FFmpeg backend messages to FFmpeg tab
       ffmpegInstance.on('log', (m) => {
-        // Only log errors and warnings to reduce noise
         try {
-          if (m && m.type && (m.type === 'fferr' || m.type === 'error')) {
-            addLog(`FFmpeg error: ${JSON.stringify(m)}`, 'info');
-          }
+          const message = m && m.message ? m.message : JSON.stringify(m);
+          addLog(message, 'ffmpeg', 'ffmpeg');
         } catch(e) {
           // Ignore logging errors
         }
@@ -870,6 +936,7 @@
       ffmpegLoaded = true;
       videosProcessedSinceReset = 0;
       addLog('  FFmpeg loaded successfully', 'success');
+      addLog('FFmpeg loaded and ready', 'success', 'ffmpeg');
       return ffmpegInstance;
     }
 
@@ -1174,6 +1241,7 @@
           if (progressCallback) {
             const percent = Math.round(progress * 100);
             progressCallback(percent);
+            addLog(`Encoding progress: ${percent}%`, 'ffmpeg', 'ffmpeg');
           }
         });
 
@@ -1285,8 +1353,10 @@
         }
 
         // Execute FFmpeg
-        addLog(`Executing FFmpeg with overlayIsImage=${overlayIsImage}, overlayFilename=${overlayFilename}`, 'info');
+        addLog(`Starting video merge (overlay type: ${overlayIsImage ? 'image' : 'video'})`, 'info', 'ffmpeg');
+        addLog(`FFmpeg command: ${args.join(' ')}`, 'ffmpeg', 'ffmpeg');
         await ffmpeg.exec(args);
+        addLog('Video merge completed successfully', 'success', 'ffmpeg');
 
         // Read output file
         const outputData = await ffmpeg.readFile("output.mp4");
@@ -1376,22 +1446,52 @@
       }
     });
 
-    function addLog(message, type = "info") {
+    /**
+     * Add log entry to appropriate tab
+     * @param {string} message - Log message
+     * @param {string} type - Log type: info, success, error, warning, ffmpeg
+     * @param {string} tab - Which tab: 'main' or 'ffmpeg'
+     */
+    function addLog(message, type = "info", tab = "main") {
+      const logContainer = tab === "ffmpeg" ? document.getElementById("logFFmpeg") : document.getElementById("log");
       const entry = document.createElement("div");
       entry.className = `log-entry ${type}`;
       entry.textContent = message;
-      log.appendChild(entry);
-      log.scrollTop = log.scrollHeight;
+      logContainer.appendChild(entry);
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    /**
+     * Switch between log tabs
+     */
+    function switchLogTab(tabName) {
+      // Update tab buttons
+      document.querySelectorAll('.log-tab').forEach(tab => {
+        tab.classList.remove('active');
+      });
+      event.target.classList.add('active');
+
+      // Update content
+      document.querySelectorAll('.log-content').forEach(content => {
+        content.classList.remove('active');
+      });
+      document.getElementById(`log-${tabName}`).classList.add('active');
     }
 
     /**
      * Copy all logs to clipboard for easy sharing/debugging
      */
     async function copyLogsToClipboard() {
-      const logEntries = document.querySelectorAll('.log-entry');
-      const logText = Array.from(logEntries)
-        .map(entry => entry.textContent)
-        .join('\n');
+      const mainLogEntries = document.querySelectorAll('#log .log-entry');
+      const ffmpegLogEntries = document.querySelectorAll('#logFFmpeg .log-entry');
+
+      let logText = '=== MAIN ACTIVITY LOG ===\n';
+      logText += Array.from(mainLogEntries).map(entry => entry.textContent).join('\n');
+
+      if (ffmpegLogEntries.length > 0) {
+        logText += '\n\n=== FFMPEG DETAILS ===\n';
+        logText += Array.from(ffmpegLogEntries).map(entry => entry.textContent).join('\n');
+      }
 
       try {
         await navigator.clipboard.writeText(logText);
@@ -1682,13 +1782,14 @@
     }
 
     /**
-     * Process a batch of items and create a ZIP file
+     * Process a batch of items with ZERO video memory accumulation
      *
-     * SMART BATCHING: To prevent memory issues, this function processes items in order:
-     * 1. All images first (smaller memory footprint)
-     * 2. Videos in sub-batches of 10 (prevents accumulating too many large videos in memory)
+     * STRATEGY: As soon as we encounter a video needing merge:
+     * 1. Download current batch (all items processed so far)
+     * 2. Process video individually in its own ZIP
+     * 3. Continue with fresh batch
      *
-     * This way we can have large overall batch sizes without running out of memory.
+     * This ensures merged videos NEVER accumulate in memory.
      */
     async function processBatch(
       batchItems,
@@ -1698,68 +1799,78 @@
       totalItems
     ) {
       zip = new JSZip();
+      let subBatchNum = 0;
+      let itemsInCurrentZip = 0;
 
       const mergeEnabled = document.getElementById('mergeOverlaysCheckbox').checked;
 
-      // Separate images and videos for smart processing
-      const images = batchItems.filter(item => item.metadata.media_type === 'Image');
-      const videos = batchItems.filter(item => item.metadata.media_type === 'Video');
+      addLog(`Batch ${batchNum}: ${batchItems.length} items to process`, 'info');
 
-      addLog(`Batch ${batchNum}: ${images.length} images, ${videos.length} videos`, 'info');
+      for (let i = 0; i < batchItems.length; i++) {
+        const item = batchItems[i];
+        const globalCount = globalStartIndex + i + 1;
+        const isVideo = item.metadata.media_type === 'Video';
 
-      // Process all images first (they're small, safe to batch)
-      if (images.length > 0) {
-        addLog(`Processing ${images.length} images...`, 'info');
-        for (let i = 0; i < images.length; i++) {
-          const item = images[i];
-          const globalCount = globalStartIndex + batchItems.indexOf(item) + 1;
-          await processItem(item, globalCount, totalItems, metadataList);
+        // Check if this video will need merging
+        const needsMerge = isVideo && mergeEnabled;
+
+        // If we encounter a video needing merge and we have items in the current ZIP, flush it
+        if (needsMerge && itemsInCurrentZip > 0) {
+          addLog(`  Downloading batch before video merge (${itemsInCurrentZip} items)...`, 'info');
+          await downloadCurrentBatch(metadataList, batchNum, subBatchNum);
+          subBatchNum++;
+          zip = new JSZip();
+          itemsInCurrentZip = 0;
+          checkMemoryUsage();
+        }
+
+        // Process the item
+        await processItem(item, globalCount, totalItems, metadataList);
+        itemsInCurrentZip++;
+
+        // If this was a video that needed merging, download it immediately in its own ZIP
+        if (needsMerge) {
+          addLog(`  Downloading merged video individually...`, 'info');
+          await downloadCurrentBatch(metadataList, batchNum, subBatchNum, `video-${item.metadata.number}`);
+          subBatchNum++;
+          zip = new JSZip();
+          itemsInCurrentZip = 0;
+
+          // Extra GC time after video
+          addLog('  Pausing 2s for garbage collection...', 'info');
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          checkMemoryUsage();
         }
       }
 
-      // Process videos in sub-batches of 10 to control memory usage
-      if (videos.length > 0 && mergeEnabled) {
-        const VIDEO_SUB_BATCH_SIZE = 10;
-        const numSubBatches = Math.ceil(videos.length / VIDEO_SUB_BATCH_SIZE);
-
-        addLog(`Processing ${videos.length} videos in ${numSubBatches} sub-batch(es) of ${VIDEO_SUB_BATCH_SIZE}...`, 'info');
-
-        for (let subBatch = 0; subBatch < numSubBatches; subBatch++) {
-          const start = subBatch * VIDEO_SUB_BATCH_SIZE;
-          const end = Math.min(start + VIDEO_SUB_BATCH_SIZE, videos.length);
-          const subBatchVideos = videos.slice(start, end);
-
-          addLog(`  Video sub-batch ${subBatch + 1}/${numSubBatches}: Processing ${subBatchVideos.length} videos`, 'info');
-
-          for (let i = 0; i < subBatchVideos.length; i++) {
-            const item = subBatchVideos[i];
-            const globalCount = globalStartIndex + batchItems.indexOf(item) + 1;
-            await processItem(item, globalCount, totalItems, metadataList);
-          }
-
-          // After each video sub-batch, give extra time for GC
-          if (subBatch < numSubBatches - 1) {
-            addLog('  Sub-batch complete, pausing 3s for garbage collection...', 'info');
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            checkMemoryUsage();
-          }
-        }
-      } else if (videos.length > 0) {
-        // No merging enabled, process videos normally
-        for (let i = 0; i < videos.length; i++) {
-          const item = videos[i];
-          const globalCount = globalStartIndex + batchItems.indexOf(item) + 1;
-          await processItem(item, globalCount, totalItems, metadataList);
-        }
+      // Download any remaining items
+      if (itemsInCurrentZip > 0) {
+        addLog(`  Downloading final batch (${itemsInCurrentZip} items)...`, 'info');
+        await downloadCurrentBatch(metadataList, batchNum, subBatchNum);
       }
+    }
 
+    /**
+     * Download the current ZIP batch
+     */
+    async function downloadCurrentBatch(metadataList, batchNum, subBatchNum, suffix = '') {
       // Add metadata.json to zip
       zip.file("metadata.json", JSON.stringify(metadataList, null, 2));
 
-      // Generate and download ZIP
-      const batchLabel = batchNum > 0 ? ` (Batch ${batchNum})` : "";
-      status.textContent = `Creating ZIP file${batchLabel}...`;
-      addLog(`Packaging batch into ZIP...`, "info");
+      // Generate filename
+      let filename;
+      if (suffix) {
+        filename = `snapchat-memories-batch-${batchNum}-${suffix}.zip`;
+      } else if (subBatchNum > 0) {
+        filename = `snapchat-memories-batch-${batchNum}-part-${subBatchNum + 1}.zip`;
+      } else if (batchNum > 0) {
+        filename = `snapchat-memories-batch-${batchNum}.zip`;
+      } else {
+        filename = "snapchat-memories.zip";
+      }
+
+      status.textContent = `Creating ${filename}...`;
+      addLog(`  Packaging ${filename}...`, "info");
 
       const zipBlob = await zip.generateAsync(
         { type: "blob" },
@@ -1774,23 +1885,13 @@
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement("a");
       a.href = url;
-      a.download =
-        batchNum > 0
-          ? `snapchat-memories-batch-${batchNum}.zip`
-          : "snapchat-memories.zip";
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      const zipFilename =
-        batchNum > 0
-          ? `snapchat-memories-batch-${batchNum}.zip`
-          : "snapchat-memories.zip";
-      addLog(`✓ Downloaded: ${zipFilename}`, "success");
-
-      status.textContent =
-        batchNum > 0 ? `Batch ${batchNum} complete` : "Download complete";
+      addLog(`  ✓ Downloaded: ${filename} (${formatBytes(zipBlob.size)})`, "success");
     }
 
     /**
