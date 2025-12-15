@@ -378,7 +378,7 @@ def download_and_extract(
                     extracted_files['main'] = file_data
 
             # Check media type
-            is_image = extension.lower() in ['.jpg', '.jpeg', '.png']
+            is_image = extension.lower() in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']
             is_video = extension.lower() in ['.mp4', '.mov', '.avi']
             merge_attempted = False
 
@@ -478,7 +478,7 @@ def download_and_extract(
                         output_filename = f"{file_num}-main{extension}"
 
                     # Add EXIF metadata to images
-                    is_image = extension.lower() in ['.jpg', '.jpeg', '.png']
+                    is_image = extension.lower() in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']
                     if is_image:
                         file_data = add_exif_metadata(file_data, date_str, latitude, longitude)
 
@@ -503,7 +503,7 @@ def download_and_extract(
         output_path = base_path / output_filename
 
         # Add EXIF metadata to images
-        is_image = extension.lower() in ['.jpg', '.jpeg', '.png']
+        is_image = extension.lower() in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']
         if is_image:
             content = add_exif_metadata(content, date_str, latitude, longitude)
 
@@ -655,7 +655,7 @@ def merge_existing_files(folder_path: str) -> None:
         try:
             # Check file type
             is_video = extension.lower() in ['.mp4', '.mov', '.avi']
-            is_image = extension.lower() in ['.jpg', '.jpeg', '.png']
+            is_image = extension.lower() in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']
 
             if is_video:
                 if not ffmpeg_available:
