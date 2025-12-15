@@ -370,17 +370,7 @@ def download_and_extract(
     if len(content) < 100:
         print(f"    WARNING: Downloaded file is very small ({len(content)} bytes) - may be invalid or expired URL")
 
-    # For videos, check if it looks like a valid MP4 file
-    is_video = extension.lower() in ['.mp4', '.mov', '.avi']
-    if is_video and len(content) >= 8:
-        # Check for MP4 magic bytes (ftyp box)
-        # Valid MP4 files typically have 'ftyp' at bytes 4-8
-        if content[4:8] not in [b'ftyp', b'mdat', b'moov', b'wide']:
-            print("    WARNING: File may not be a valid video (invalid MP4 signature)")
-            print(f"    First 20 bytes: {content[:20]}")
-            print("    This might be an HTML error page or expired download link")
-
-    # Check if it's a ZIP file
+    # Check if it's a ZIP file first (videos with overlays come as ZIP)
     if is_zip_file(content):
         # Extract ZIP contents
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
@@ -537,6 +527,16 @@ def download_and_extract(
         # If overlays_only mode is enabled, skip non-ZIP files
         if overlays_only:
             return []
+
+        # For standalone videos, validate MP4 signature
+        is_video = extension.lower() in ['.mp4', '.mov', '.avi']
+        if is_video and len(content) >= 8:
+            # Check for MP4 magic bytes (ftyp box)
+            # Valid MP4 files typically have 'ftyp' at bytes 4-8
+            if content[4:8] not in [b'ftyp', b'mdat', b'moov', b'wide']:
+                print("    WARNING: File may not be a valid video (invalid MP4 signature)")
+                print(f"    First 20 bytes: {content[:20]}")
+                print("    This might be an HTML error page or expired download link")
 
         # Save as regular file
         output_filename = f"{file_num}{extension}"
