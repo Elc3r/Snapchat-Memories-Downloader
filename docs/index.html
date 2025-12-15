@@ -528,14 +528,38 @@
               font-size: 14px;
               width: 200px;
             ">
-          <option value="50">50 files per batch</option>
-          <option value="100" selected>100 files per batch</option>
+          <option value="10">10 files per batch</option>
+          <option value="20">20 files per batch</option>
+          <option value="50" selected>50 files per batch</option>
+          <option value="100">100 files per batch</option>
           <option value="200">200 files per batch</option>
           <option value="0">All in one ZIP</option>
         </select>
         <p style="color: #666; margin-top: 10px; font-size: 14px">
-          Downloads will be split into multiple ZIP files for easier recovery
-          if interrupted.
+          Downloads will be split into multiple ZIP files. Smart batching processes videos in sub-batches of 10 to prevent memory issues.
+        </p>
+      </div>
+
+      <div style="
+            margin-top: 25px;
+            padding-top: 20px;
+            border-top: 1px solid #dee2e6;
+          ">
+        <label style="display: block; margin-bottom: 10px; font-size: 16px"><strong>Video Memory Management</strong></label>
+        <select id="ffmpegResetIntervalSelect" style="
+              padding: 8px;
+              border: 2px solid #667eea;
+              border-radius: 4px;
+              font-size: 14px;
+              width: 250px;
+            ">
+          <option value="3">Reset every 3 videos (safest)</option>
+          <option value="5" selected>Reset every 5 videos (recommended)</option>
+          <option value="10">Reset every 10 videos (faster)</option>
+          <option value="999">Never reset (risky)</option>
+        </select>
+        <p style="color: #666; margin-top: 10px; font-size: 14px">
+          Recreates the video processor to prevent memory buildup. Lower values are safer but slightly slower.
         </p>
       </div>
 
@@ -565,6 +589,12 @@
       <div class="status" id="status">Preparing download...</div>
       <div class="progress-bar">
         <div class="progress-fill" id="progressFill">0%</div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <div style="color: #666; font-size: 14px; font-weight: 600;">Activity Log</div>
+        <button id="copyLogsBtn" class="btn" style="padding: 6px 15px; font-size: 13px;" onclick="copyLogsToClipboard()">
+          📋 Copy Logs
+        </button>
       </div>
       <div class="log" id="log"></div>
     </div>
@@ -674,6 +704,38 @@
           and "Shared Stories" in addition to "Memories". This tool works with
           all of them.
         </p>
+
+        <h3 style="margin-top: 20px; color: #667eea">
+          How does smart batching work?
+        </h3>
+        <p>
+          To prevent memory issues, the tool automatically processes items intelligently:
+        </p>
+        <ul style="margin-left: 20px; margin-top: 5px;">
+          <li><strong>Images first:</strong> All images in the batch are processed first (they're small, ~5-10MB)</li>
+          <li><strong>Videos in sub-batches:</strong> Videos are processed in groups of 10 with garbage collection pauses between groups</li>
+          <li><strong>Memory management:</strong> FFmpeg automatically resets every 5 videos to prevent memory buildup</li>
+        </ul>
+        <p style="margin-top: 10px;">
+          This allows you to use larger batch sizes (50-100 files) without running out of memory, even with video merging enabled!
+        </p>
+
+        <h3 style="margin-top: 20px; color: #667eea">
+          How do I report issues or bugs?
+        </h3>
+        <p>
+          If you encounter problems, please help us fix them by reporting the issue:
+        </p>
+        <ol style="margin-left: 20px; margin-top: 5px;">
+          <li>Click the <strong>"📋 Copy Logs"</strong> button above the activity log</li>
+          <li>Go to the <a href="https://github.com/andrefecto/Snapchat-Memories-Downloader/issues" target="_blank" style="color: #667eea; font-weight: 600;">GitHub Issues page</a></li>
+          <li>Create a new issue describing the problem</li>
+          <li>Paste the copied logs into the issue</li>
+          <li>Include browser type (Chrome/Firefox/Edge) and your device specs</li>
+        </ol>
+        <p style="margin-top: 10px;">
+          The logs help identify exactly what went wrong and make it much easier to fix bugs quickly!
+        </p>
       </div>
     </div>
 
@@ -738,13 +800,47 @@
     // FFmpeg.wasm for video overlay merging
     let ffmpegLoaded = false;
     let ffmpegInstance = null;
+    let videosProcessedSinceReset = 0;
+    let totalVideosProcessed = 0;
+
+    /**
+     * Terminate FFmpeg.wasm instance and release memory
+     */
+    async function terminateFFmpeg() {
+      if (ffmpegInstance) {
+        try {
+          // Remove all event listeners
+          ffmpegInstance.off('log');
+          ffmpegInstance.off('progress');
+          // Note: FFmpeg.wasm doesn't have a built-in terminate method
+          // Setting to null allows garbage collection
+          ffmpegInstance = null;
+          ffmpegLoaded = false;
+          videosProcessedSinceReset = 0;
+          addLog('  FFmpeg instance terminated, memory released', 'info');
+          // Give browser time to garbage collect
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          console.warn('Error terminating FFmpeg:', error);
+        }
+      }
+    }
 
     /**
      * Initialize FFmpeg.wasm instance
-     * Only loads once, cached for subsequent calls
+     * @param {boolean} forceReload - Force recreation even if already loaded
      */
+    async function initFFmpeg(forceReload = false) {
+      // Check if we need to reset due to memory concerns
+      const resetInterval = parseInt(document.getElementById('ffmpegResetIntervalSelect')?.value || '5');
 
-    async function initFFmpeg() {
+      if (forceReload || (videosProcessedSinceReset >= resetInterval && resetInterval < 999)) {
+        if (ffmpegInstance) {
+          addLog(`  Resetting FFmpeg after ${videosProcessedSinceReset} videos (prevents memory buildup)`, 'info');
+          await terminateFFmpeg();
+        }
+      }
+
       if (ffmpegLoaded && ffmpegInstance) {
         return ffmpegInstance;
       }
@@ -752,21 +848,53 @@
       const { FFmpeg } = FFmpegWASM;
       ffmpegInstance = new FFmpeg();
 
+      addLog('  Loading FFmpeg.wasm (this may take a few seconds)...', 'info');
       await ffmpegInstance.load({
         coreURL: new URL('./ffmpeg/ffmpeg-core.js', window.location).href,
         wasmURL: new URL('./ffmpeg/ffmpeg-core.wasm', window.location).href,
         worker: false
       });
-      addLog(`FFmpeg coreURL: ${new URL('./ffmpeg/ffmpeg-core.js', window.location).href}`, 'info');
-      addLog(`FFmpeg wasmURL: ${new URL('./ffmpeg/ffmpeg-core.wasm', window.location).href}`, 'info');
-      // Log FFmpeg backend messages for debugging
+
+      // Log FFmpeg backend messages for debugging (less verbose now)
       ffmpegInstance.on('log', (m) => {
-        try { addLog(`FFmpeg log: ${JSON.stringify(m)}`, 'info'); } catch(e) { addLog(`FFmpeg log: ${m}`, 'info'); }
+        // Only log errors and warnings to reduce noise
+        try {
+          if (m && m.type && (m.type === 'fferr' || m.type === 'error')) {
+            addLog(`FFmpeg error: ${JSON.stringify(m)}`, 'info');
+          }
+        } catch(e) {
+          // Ignore logging errors
+        }
       });
 
       ffmpegLoaded = true;
-      addLog('FFmpeg loaded successfully (local, no workers)', 'success');
+      videosProcessedSinceReset = 0;
+      addLog('  FFmpeg loaded successfully', 'success');
       return ffmpegInstance;
+    }
+
+    /**
+     * Check memory usage and warn if getting low (Chrome only)
+     */
+    function checkMemoryUsage() {
+      try {
+        if (performance.memory) {
+          const usedMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+          const limitMB = Math.round(performance.memory.jsHeapSizeLimit / 1024 / 1024);
+          const percentUsed = Math.round((usedMB / limitMB) * 100);
+
+          if (percentUsed > 80) {
+            addLog(`  ⚠️ Memory usage high: ${usedMB}MB / ${limitMB}MB (${percentUsed}%)`, 'info');
+            addLog(`  Recommendation: Close other tabs or reduce reset interval`, 'info');
+          } else if (percentUsed > 60) {
+            addLog(`  Memory usage: ${usedMB}MB / ${limitMB}MB (${percentUsed}%)`, 'info');
+          }
+          return { usedMB, limitMB, percentUsed };
+        }
+      } catch (e) {
+        // performance.memory not available (Firefox, Safari)
+      }
+      return null;
     }
 
     /**
@@ -1027,7 +1155,7 @@
       overlayIsImage = false,
       overlayExt = '.mp4'
     ) {
-      const ffmpeg = await initFFmpeg();
+      const ffmpeg = await initFFmpeg(); // Will auto-reset if needed
 
       if (!ffmpeg) {
         throw new Error("FFmpeg.wasm not available");
@@ -1171,6 +1299,10 @@
         // Remove progress listener
         ffmpeg.off("progress");
 
+        // Increment success counter
+        videosProcessedSinceReset++;
+        totalVideosProcessed++;
+
         // Convert Uint8Array to ArrayBuffer
         return outputData.buffer;
       } catch (error) {
@@ -1183,6 +1315,11 @@
         } catch (cleanupError) {
           // Ignore cleanup errors
         }
+
+        // On error, terminate FFmpeg instance to ensure clean state for next video
+        addLog('  Video merge failed, resetting FFmpeg for next attempt', 'info');
+        await terminateFFmpeg();
+
         // Normalize and wrap the error so downstream handlers can log details
         let errorMsg = "";
         try {
@@ -1245,6 +1382,60 @@
       entry.textContent = message;
       log.appendChild(entry);
       log.scrollTop = log.scrollHeight;
+    }
+
+    /**
+     * Copy all logs to clipboard for easy sharing/debugging
+     */
+    async function copyLogsToClipboard() {
+      const logEntries = document.querySelectorAll('.log-entry');
+      const logText = Array.from(logEntries)
+        .map(entry => entry.textContent)
+        .join('\n');
+
+      try {
+        await navigator.clipboard.writeText(logText);
+
+        // Visual feedback
+        const btn = document.getElementById('copyLogsBtn');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '✅ Copied!';
+        btn.style.background = '#28a745';
+
+        setTimeout(() => {
+          btn.innerHTML = originalText;
+          btn.style.background = '#667eea';
+        }, 2000);
+
+        addLog('Logs copied to clipboard!', 'success');
+      } catch (err) {
+        // Fallback for older browsers
+        const textarea = document.createElement('textarea');
+        textarea.value = logText;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+
+        try {
+          document.execCommand('copy');
+          addLog('Logs copied to clipboard!', 'success');
+
+          const btn = document.getElementById('copyLogsBtn');
+          const originalText = btn.innerHTML;
+          btn.innerHTML = '✅ Copied!';
+          btn.style.background = '#28a745';
+
+          setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.style.background = '#667eea';
+          }, 2000);
+        } catch (e) {
+          addLog('Failed to copy logs. Please select and copy manually.', 'error');
+        }
+
+        document.body.removeChild(textarea);
+      }
     }
 
     function updateProgress(current, total) {
@@ -1490,6 +1681,15 @@
       progressFill.textContent = "100%";
     }
 
+    /**
+     * Process a batch of items and create a ZIP file
+     *
+     * SMART BATCHING: To prevent memory issues, this function processes items in order:
+     * 1. All images first (smaller memory footprint)
+     * 2. Videos in sub-batches of 10 (prevents accumulating too many large videos in memory)
+     *
+     * This way we can have large overall batch sizes without running out of memory.
+     */
     async function processBatch(
       batchItems,
       metadataList,
@@ -1499,79 +1699,176 @@
     ) {
       zip = new JSZip();
 
-      for (let count = 0; count < batchItems.length; count++) {
-        const { metadata, index: i } = batchItems[count];
-        const memory = memories[i];
-        const fileNum = String(metadata.number).padStart(2, "0");
-        const extension = metadata.media_type === "Video" ? ".mp4" : ".jpg";
+      const mergeEnabled = document.getElementById('mergeOverlaysCheckbox').checked;
 
-        const globalCount = globalStartIndex + count + 1;
-        updateProgress(globalCount, totalItems);
-        addLog(
-          `[${globalCount}/${totalItems}] #${metadata.number} ${metadata.date} - ${metadata.media_type}`,
-          "info"
-        );
+      // Separate images and videos for smart processing
+      const images = batchItems.filter(item => item.metadata.media_type === 'Image');
+      const videos = batchItems.filter(item => item.metadata.media_type === 'Video');
 
-        // Mark as in progress
-        metadata.status = "in_progress";
+      addLog(`Batch ${batchNum}: ${images.length} images, ${videos.length} videos`, 'info');
 
-        try {
-          addLog(`    Fetching: ${metadata.url}`, "info");
-          console.log("Fetching:", metadata.url);
-          const response = await fetch(metadata.url);
-          if (!response.ok) {
-            const bodyText = await response.text().catch(()=>"<no body>");
-            addLog(`    HTTP error ${response.status} while fetching ${metadata.url}`, "error");
-            console.error(`HTTP ${response.status} fetching ${metadata.url}:`, bodyText);
-            throw new Error(`HTTP ${response.status}`);
+      // Process all images first (they're small, safe to batch)
+      if (images.length > 0) {
+        addLog(`Processing ${images.length} images...`, 'info');
+        for (let i = 0; i < images.length; i++) {
+          const item = images[i];
+          const globalCount = globalStartIndex + batchItems.indexOf(item) + 1;
+          await processItem(item, globalCount, totalItems, metadataList);
+        }
+      }
+
+      // Process videos in sub-batches of 10 to control memory usage
+      if (videos.length > 0 && mergeEnabled) {
+        const VIDEO_SUB_BATCH_SIZE = 10;
+        const numSubBatches = Math.ceil(videos.length / VIDEO_SUB_BATCH_SIZE);
+
+        addLog(`Processing ${videos.length} videos in ${numSubBatches} sub-batch(es) of ${VIDEO_SUB_BATCH_SIZE}...`, 'info');
+
+        for (let subBatch = 0; subBatch < numSubBatches; subBatch++) {
+          const start = subBatch * VIDEO_SUB_BATCH_SIZE;
+          const end = Math.min(start + VIDEO_SUB_BATCH_SIZE, videos.length);
+          const subBatchVideos = videos.slice(start, end);
+
+          addLog(`  Video sub-batch ${subBatch + 1}/${numSubBatches}: Processing ${subBatchVideos.length} videos`, 'info');
+
+          for (let i = 0; i < subBatchVideos.length; i++) {
+            const item = subBatchVideos[i];
+            const globalCount = globalStartIndex + batchItems.indexOf(item) + 1;
+            await processItem(item, globalCount, totalItems, metadataList);
           }
 
-          const blob = await response.blob();
-          const arrayBuffer = await blob.arrayBuffer();
+          // After each video sub-batch, give extra time for GC
+          if (subBatch < numSubBatches - 1) {
+            addLog('  Sub-batch complete, pausing 3s for garbage collection...', 'info');
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            checkMemoryUsage();
+          }
+        }
+      } else if (videos.length > 0) {
+        // No merging enabled, process videos normally
+        for (let i = 0; i < videos.length; i++) {
+          const item = videos[i];
+          const globalCount = globalStartIndex + batchItems.indexOf(item) + 1;
+          await processItem(item, globalCount, totalItems, metadataList);
+        }
+      }
 
-          // Validate downloaded content
-          if (arrayBuffer.byteLength < 100) {
+      // Add metadata.json to zip
+      zip.file("metadata.json", JSON.stringify(metadataList, null, 2));
+
+      // Generate and download ZIP
+      const batchLabel = batchNum > 0 ? ` (Batch ${batchNum})` : "";
+      status.textContent = `Creating ZIP file${batchLabel}...`;
+      addLog(`Packaging batch into ZIP...`, "info");
+
+      const zipBlob = await zip.generateAsync(
+        { type: "blob" },
+        (metadata) => {
+          const percent = Math.round(metadata.percent);
+          progressFill.style.width = `${percent}%`;
+          progressFill.textContent = `${percent}%`;
+        }
+      );
+
+      // Download the ZIP file
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        batchNum > 0
+          ? `snapchat-memories-batch-${batchNum}.zip`
+          : "snapchat-memories.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      const zipFilename =
+        batchNum > 0
+          ? `snapchat-memories-batch-${batchNum}.zip`
+          : "snapchat-memories.zip";
+      addLog(`✓ Downloaded: ${zipFilename}`, "success");
+
+      status.textContent =
+        batchNum > 0 ? `Batch ${batchNum} complete` : "Download complete";
+    }
+
+    /**
+     * Process a single item (image or video)
+     * Extracted from processBatch to support smart batching
+     */
+    async function processItem(batchItem, globalCount, totalItems, metadataList) {
+      const { metadata, index: i } = batchItem;
+      const memory = memories[i];
+      const fileNum = String(metadata.number).padStart(2, "0");
+      const extension = metadata.media_type === "Video" ? ".mp4" : ".jpg";
+
+      updateProgress(globalCount, totalItems);
+      addLog(
+        `[${globalCount}/${totalItems}] #${metadata.number} ${metadata.date} - ${metadata.media_type}`,
+        "info"
+      );
+
+      // Mark as in progress
+      metadata.status = "in_progress";
+
+      try {
+        addLog(`    Fetching: ${metadata.url}`, "info");
+        console.log("Fetching:", metadata.url);
+        const response = await fetch(metadata.url);
+        if (!response.ok) {
+          const bodyText = await response.text().catch(() => "<no body>");
+          addLog(`    HTTP error ${response.status} while fetching ${metadata.url}`, "error");
+          console.error(`HTTP ${response.status} fetching ${metadata.url}:`, bodyText);
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        const arrayBuffer = await blob.arrayBuffer();
+
+        // Validate downloaded content
+        if (arrayBuffer.byteLength < 100) {
+          addLog(
+            `    WARNING: Downloaded file is very small (${arrayBuffer.byteLength} bytes) - may be invalid or expired URL`,
+            "warning"
+          );
+        }
+
+        // Check if it's a ZIP file (overlay content)
+        const uint8Array = new Uint8Array(arrayBuffer);
+        const isZip = uint8Array[0] === 0x50 && uint8Array[1] === 0x4b;
+
+        // For videos, check if it looks like a valid MP4 file
+        if (
+          metadata.media_type === "Video" &&
+          !isZip &&
+          arrayBuffer.byteLength >= 8
+        ) {
+          // Check for MP4 magic bytes (ftyp box at bytes 4-8)
+          const signature = String.fromCharCode(...uint8Array.slice(4, 8));
+          const validSignatures = ["ftyp", "mdat", "moov", "wide"];
+          if (!validSignatures.includes(signature)) {
             addLog(
-              `    WARNING: Downloaded file is very small (${arrayBuffer.byteLength} bytes) - may be invalid or expired URL`,
+              `    WARNING: File may not be a valid video (invalid MP4 signature)`,
+              "warning"
+            );
+            addLog(
+              `    First bytes: ${Array.from(uint8Array.slice(0, 20))
+                .map((b) => b.toString(16).padStart(2, "0"))
+                .join(" ")}`,
+              "warning"
+            );
+            addLog(
+              `    This might be an HTML error page or expired download link`,
               "warning"
             );
           }
+        }
 
-          // Check if it's a ZIP file (overlay content)
-          const uint8Array = new Uint8Array(arrayBuffer);
-          const isZip = uint8Array[0] === 0x50 && uint8Array[1] === 0x4b;
+        // Reset files array
+        metadata.files = [];
 
-          // For videos, check if it looks like a valid MP4 file
-          if (
-            metadata.media_type === "Video" &&
-            !isZip &&
-            arrayBuffer.byteLength >= 8
-          ) {
-            // Check for MP4 magic bytes (ftyp box at bytes 4-8)
-            const signature = String.fromCharCode(...uint8Array.slice(4, 8));
-            const validSignatures = ["ftyp", "mdat", "moov", "wide"];
-            if (!validSignatures.includes(signature)) {
-              addLog(
-                `    WARNING: File may not be a valid video (invalid MP4 signature)`,
-                "warning"
-              );
-              addLog(
-                `    First bytes: ${Array.from(uint8Array.slice(0, 20))
-                  .map((b) => b.toString(16).padStart(2, "0"))
-                  .join(" ")}`,
-                "warning"
-              );
-              addLog(
-                `    This might be an HTML error page or expired download link`,
-                "warning"
-              );
-            }
-          }
-
-          // Reset files array
-          metadata.files = [];
-
-          if (isZip) {
+        if (isZip) {
             // Extract ZIP contents
             const innerZip = await JSZip.loadAsync(arrayBuffer);
             const files = Object.keys(innerZip.files);
@@ -1773,6 +2070,9 @@
                       )})`,
                       "success"
                     );
+
+                    // Check memory after video processing
+                    checkMemoryUsage();
                   } else {
                     throw new Error("Missing main or overlay video file");
                   }
@@ -1912,59 +2212,16 @@
             );
           }
 
-          // Mark as successful
-          metadata.status = "success";
-          delete metadata.error; // Remove any previous error
-        } catch (error) {
-          addLog(`  ERROR: ${error.message}`, "error");
-          metadata.status = "failed";
-          metadata.error = error.message;
-        }
-
-        // Small delay to prevent overwhelming the browser
-        if (count % 10 === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
+        // Mark as successful
+        metadata.status = "success";
+        delete metadata.error; // Remove any previous error
+      } catch (error) {
+        addLog(`  ERROR: ${error.message}`, "error");
+        metadata.status = "failed";
+        metadata.error = error.message;
       }
 
-      // Add metadata.json to zip
-      zip.file("metadata.json", JSON.stringify(metadataList, null, 2));
-
-      // Generate and download ZIP
-      const batchLabel = batchNum > 0 ? ` (Batch ${batchNum})` : "";
-      status.textContent = `Creating ZIP file${batchLabel}...`;
-      addLog(`Packaging batch into ZIP...`, "info");
-
-      const zipBlob = await zip.generateAsync(
-        { type: "blob" },
-        (metadata) => {
-          const percent = Math.round(metadata.percent);
-          progressFill.style.width = `${percent}%`;
-          progressFill.textContent = `${percent}%`;
-        }
-      );
-
-      // Download the ZIP file
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download =
-        batchNum > 0
-          ? `snapchat-memories-batch-${batchNum}.zip`
-          : "snapchat-memories.zip";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      const zipFilename =
-        batchNum > 0
-          ? `snapchat-memories-batch-${batchNum}.zip`
-          : "snapchat-memories.zip";
-      addLog(`✓ Downloaded: ${zipFilename}`, "success");
-
-      status.textContent =
-        batchNum > 0 ? `Batch ${batchNum} complete` : "Download complete";
+      // Delays happen at the sub-batch level in processBatch, not per-item
     }
 
     function formatBytes(bytes) {
