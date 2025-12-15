@@ -238,7 +238,9 @@ def add_exif_metadata(
 
 
 def merge_image_overlay(main_data: bytes, overlay_data: bytes) -> bytes:
-    """Merge overlay image on top of main image using PIL."""
+    """Merge overlay image on top of main image using PIL.
+    Preserves the original format of the main image.
+    """
     if Image is None:
         raise ImportError("Pillow is required for overlay merging")
 
@@ -246,12 +248,15 @@ def merge_image_overlay(main_data: bytes, overlay_data: bytes) -> bytes:
     main_img = Image.open(io.BytesIO(main_data))
     overlay_img = Image.open(io.BytesIO(overlay_data))
 
+    # Preserve original format
+    original_format = main_img.format or 'JPEG'
+
     # Ensure overlay has alpha channel
     if overlay_img.mode != 'RGBA':
         overlay_img = overlay_img.convert('RGBA')
 
-    # Ensure main image is in RGB mode
-    if main_img.mode != 'RGB':
+    # Ensure main image is in RGB or RGBA mode
+    if main_img.mode not in ['RGB', 'RGBA']:
         main_img = main_img.convert('RGB')
 
     # Resize overlay to match main image if needed
@@ -261,9 +266,29 @@ def merge_image_overlay(main_data: bytes, overlay_data: bytes) -> bytes:
     # Composite overlay onto main
     main_img.paste(overlay_img, (0, 0), overlay_img)
 
-    # Save to bytes
+    # Save to bytes, preserving original format
     output = io.BytesIO()
-    main_img.save(output, format='JPEG', quality=95)
+
+    if original_format in ['JPEG', 'JPG']:
+        # Convert RGBA to RGB if needed (JPEG doesn't support alpha)
+        if main_img.mode == 'RGBA':
+            main_img = main_img.convert('RGB')
+        main_img.save(output, format='JPEG', quality=95)
+    elif original_format == 'PNG':
+        main_img.save(output, format='PNG')
+    elif original_format == 'WEBP':
+        main_img.save(output, format='WEBP', quality=95)
+    elif original_format in ['GIF', 'BMP', 'TIFF']:
+        # Convert to RGB for these formats (they don't support RGBA well)
+        if main_img.mode == 'RGBA':
+            main_img = main_img.convert('RGB')
+        main_img.save(output, format=original_format)
+    else:
+        # Default to JPEG for unknown formats
+        if main_img.mode == 'RGBA':
+            main_img = main_img.convert('RGB')
+        main_img.save(output, format='JPEG', quality=95)
+
     return output.getvalue()
 
 
@@ -345,6 +370,7 @@ def download_and_extract(
     file_num: str,
     extension: str,
     merge_overlays: bool = False,
+    defer_video_overlays: bool = False,
     date_str: str = 'Unknown',
     latitude: str = 'Unknown',
     longitude: str = 'Unknown',
@@ -432,7 +458,7 @@ def download_and_extract(
                         # Fall back to saving separately
                         merge_overlays = False
 
-                elif is_video and ffmpeg_available:
+                elif is_video and ffmpeg_available and not defer_video_overlays:
                     try:
                         # Create temporary files for main and overlay
                         temp_main = base_path / f"{file_num}-temp-main{extension}"
@@ -493,6 +519,11 @@ def download_and_extract(
 
             # If not merging or merge failed, save separately
             if not merge_attempted:
+                # Check if this is a deferred video
+                is_deferred = is_video and has_overlay and defer_video_overlays and merge_overlays
+                if is_deferred:
+                    print("    Deferring video overlay merge until end")
+
                 for file_type, file_info in extracted_files.items():
                     file_data = file_info['data']
                     file_ext = file_info['ext']
@@ -503,8 +534,8 @@ def download_and_extract(
                         output_filename = f"{file_num}-main{file_ext}"
 
                     # Add EXIF metadata to images (preserves original format)
-                    is_image = file_ext.lower() in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']
-                    if is_image:
+                    is_image_file = file_ext.lower() in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']
+                    if is_image_file:
                         file_data = add_exif_metadata(file_data, date_str, latitude, longitude)
 
                     output_path = base_path / output_filename
@@ -516,11 +547,17 @@ def download_and_extract(
                     timestamp = parse_date_to_timestamp(date_str)
                     set_file_timestamp(output_path, timestamp)
 
-                    files_saved.append({
+                    file_info_dict = {
                         'path': output_filename,
                         'size': len(file_data),
                         'type': file_type
-                    })
+                    }
+
+                    # Mark as deferred if applicable
+                    if is_deferred:
+                        file_info_dict['deferred'] = True
+
+                    files_saved.append(file_info_dict)
 
     else:
         # Not a ZIP - no overlay present
@@ -759,11 +796,16 @@ def download_all_memories(
     resume: bool = False,
     retry_failed: bool = False,
     merge_overlays: bool = False,
+    defer_video_overlays: bool = False,
     videos_only: bool = False,
     pictures_only: bool = False,
     overlays_only: bool = False
 ) -> None:
-    """Download all memories with sequential naming and metadata preservation."""
+    """Download all memories with sequential naming and metadata preservation.
+
+    If defer_video_overlays is True, videos with overlays are saved as -main/-overlay
+    files during download, then merged at the end.
+    """
 
     # Parse HTML to get all memories
     memories = parse_html_file(html_path)
@@ -815,6 +857,7 @@ def download_all_memories(
     print("=" * 60)
 
     total_items = len(items_to_download)
+    deferred_videos = []  # Track videos to merge later
 
     for count, (idx, metadata) in enumerate(items_to_download, start=1):
         memory = memories[idx]
@@ -839,6 +882,7 @@ def download_all_memories(
             # Download and extract file(s)
             files_saved = download_and_extract(
                 memory['url'], output_path, file_num, extension, merge_overlays,
+                defer_video_overlays,
                 metadata['date'], metadata['latitude'], metadata['longitude'],
                 overlays_only
             )
@@ -874,6 +918,10 @@ def download_all_memories(
             metadata['status'] = 'success'
             metadata['files'] = files_saved
 
+            # Track deferred videos for later processing
+            if any(f.get('deferred') for f in files_saved):
+                deferred_videos.append((file_num, metadata, files_saved))
+
         except (OSError, requests.RequestException, zipfile.BadZipFile) as e:
             print(f"  ERROR: {str(e)}")
             metadata['status'] = 'failed'
@@ -881,6 +929,70 @@ def download_all_memories(
 
         # Save metadata after each download
         save_metadata(metadata_list, output_path)
+
+    # Process deferred video overlays
+    if deferred_videos:
+        print("\n" + "=" * 60)
+        print(f"Processing {len(deferred_videos)} deferred video overlay(s)...")
+        print("=" * 60)
+
+        for i, (file_num, metadata, files_saved) in enumerate(deferred_videos, start=1):
+            print(f"\n[{i}/{len(deferred_videos)}] Processing deferred video #{metadata['number']}")
+
+            # Find main and overlay files
+            main_file = None
+            overlay_file = None
+            for file_info in files_saved:
+                file_path = output_path / file_info['path']
+                if file_info['type'] == 'main':
+                    main_file = file_path
+                elif file_info['type'] == 'overlay':
+                    overlay_file = file_path
+
+            if main_file and overlay_file:
+                try:
+                    # Determine output filename
+                    extension = main_file.suffix
+                    output_filename = f"{file_num}{extension}"
+                    merged_file = output_path / output_filename
+
+                    # Merge videos
+                    print("  Merging video overlay (this may take a while)...")
+                    success = merge_video_overlay(main_file, overlay_file, merged_file)
+
+                    if success:
+                        # Update metadata to reflect merged file
+                        metadata['files'] = [{
+                            'path': output_filename,
+                            'size': merged_file.stat().st_size,
+                            'type': 'merged'
+                        }]
+
+                        # Set timestamp
+                        timestamp = parse_date_to_timestamp(metadata['date'])
+                        if timestamp:
+                            set_file_timestamp(merged_file, timestamp)
+
+                        # Delete -main and -overlay files
+                        if main_file.exists():
+                            main_file.unlink()
+                            print(f"  Deleted: {main_file.name}")
+                        if overlay_file.exists():
+                            overlay_file.unlink()
+                            print(f"  Deleted: {overlay_file.name}")
+
+                        print(f"  Success: {output_filename} ({merged_file.stat().st_size:,} bytes)")
+                    else:
+                        print("  ERROR: Video merge failed, keeping separate files")
+
+                except Exception as e:
+                    print(f"  ERROR: {str(e)}")
+                    print("  Keeping separate -main/-overlay files")
+
+        # Save metadata after deferred processing
+        save_metadata(metadata_list, output_path)
+        print("\n" + "=" * 60)
+        print("Deferred video processing complete!")
 
     # Final save
     metadata_file = output_path / 'metadata.json'
@@ -945,6 +1057,11 @@ if __name__ == '__main__':
         help='Merge overlay images and videos on top of main content (requires FFmpeg for videos)'
     )
     parser.add_argument(
+        '--defer-video-overlays',
+        action='store_true',
+        help='Download all memories first, then process video overlays at the end. Only applies when --merge-overlays is enabled.'
+    )
+    parser.add_argument(
         '--videos-only',
         action='store_true',
         help='Only download and process videos (skip pictures). Useful for re-processing existing downloads.'
@@ -993,6 +1110,7 @@ if __name__ == '__main__':
     retry_failed_mode = args.retry_failed
     test_mode = args.test
     merge_overlays_mode = args.merge_overlays
+    defer_video_overlays_mode = args.defer_video_overlays
     videos_only_mode = args.videos_only
     pictures_only_mode = args.pictures_only
     overlays_only_mode = args.overlays_only
@@ -1029,6 +1147,7 @@ if __name__ == '__main__':
             try:
                 files_saved = download_and_extract(
                     memory['url'], output_path, file_num, extension, merge_overlays_mode,
+                    defer_video_overlays_mode,
                     metadata['date'], metadata['latitude'], metadata['longitude'],
                     False  # overlays_only not used in test mode
                 )
@@ -1073,6 +1192,7 @@ if __name__ == '__main__':
             resume=resume_mode,
             retry_failed=retry_failed_mode,
             merge_overlays=merge_overlays_mode,
+            defer_video_overlays=defer_video_overlays_mode,
             videos_only=videos_only_mode,
             pictures_only=pictures_only_mode,
             overlays_only=overlays_only_mode
