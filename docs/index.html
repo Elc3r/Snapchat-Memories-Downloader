@@ -1323,14 +1323,24 @@
             "output.mp4",
           ];
         } else {
-          // overlay is a video - use scale2ref to match dimensions
+          // overlay is a video
+          // Use explicit dimensions if available (more compatible than scale2ref in WASM)
+          let filterComplex;
+          if (mainWidth && mainHeight) {
+            addLog(`  Using explicit dimensions for overlay scaling: ${mainWidth}x${mainHeight}`, 'info', 'ffmpeg');
+            filterComplex = `[0:v]fps=30,setsar=1[base];[1:v]scale=${mainWidth}:${mainHeight},fps=30,setsar=1,loop=loop=-1:size=32767:start=0,setpts=N/FRAME_RATE/TB[ovr];[base][ovr]overlay=format=auto:shortest=1[outv]`;
+          } else {
+            addLog('  Using scale2ref for overlay scaling (dimensions not available)', 'warning', 'ffmpeg');
+            filterComplex = "[0:v]fps=30,setsar=1[base];[1:v]fps=30,setsar=1,loop=loop=-1:size=32767:start=0,setpts=N/FRAME_RATE/TB[ovr_tmp];[ovr_tmp][base]scale2ref[ovr][base];[base][ovr]overlay=format=auto:shortest=1[outv]";
+          }
+
           args = [
             "-i",
             "main.mp4",
             "-i",
             overlayFilename,
             "-filter_complex",
-            "[0:v]fps=30,setsar=1[base];[1:v]fps=30,setsar=1,loop=loop=-1:size=32767:start=0,setpts=N/FRAME_RATE/TB[ovr_tmp];[ovr_tmp][base]scale2ref[ovr][base];[base][ovr]overlay=format=auto:shortest=1[outv]",
+            filterComplex,
             "-map",
             "[outv]",
             "-map",
@@ -1338,7 +1348,7 @@
             "-c:v",
             "libx264",
             "-preset",
-            "ultrafast",
+            "medium", // Changed from ultrafast - more stable encoding
             "-crf",
             "23",
             "-pix_fmt",
@@ -1355,11 +1365,25 @@
         // Execute FFmpeg
         addLog(`Starting video merge (overlay type: ${overlayIsImage ? 'image' : 'video'})`, 'info', 'ffmpeg');
         addLog(`FFmpeg command: ${args.join(' ')}`, 'ffmpeg', 'ffmpeg');
-        await ffmpeg.exec(args);
-        addLog('Video merge completed successfully', 'success', 'ffmpeg');
+
+        try {
+          await ffmpeg.exec(args);
+          addLog('Video merge completed successfully', 'success', 'ffmpeg');
+        } catch (execError) {
+          addLog(`FFmpeg execution error: ${execError.message || String(execError)}`, 'error', 'ffmpeg');
+          throw new Error(`FFmpeg execution failed: ${execError.message || String(execError)}`);
+        }
 
         // Read output file
         const outputData = await ffmpeg.readFile("output.mp4");
+
+        // Validate output size
+        if (outputData.byteLength < 1000) {
+          addLog(`WARNING: Output video is suspiciously small (${outputData.byteLength} bytes)`, 'error', 'ffmpeg');
+          throw new Error(`Output video too small: ${outputData.byteLength} bytes - likely encoding failure`);
+        }
+
+        addLog(`Output video size: ${formatBytes(outputData.byteLength)}`, 'success', 'ffmpeg');
 
         // Clean up virtual filesystem
         await ffmpeg.deleteFile("main.mp4").catch(() => {});
