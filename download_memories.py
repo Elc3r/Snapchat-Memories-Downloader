@@ -376,7 +376,8 @@ def download_and_extract(
     latitude: str = 'Unknown',
     longitude: str = 'Unknown',
     overlays_only: bool = False,
-    use_timestamp_filenames: bool = False
+    use_timestamp_filenames: bool = False,
+    check_duplicates: bool = False
 ) -> list:
     """
     Download a file from URL. If it's a ZIP with overlay, extract and optionally merge.
@@ -445,18 +446,30 @@ def download_and_extract(
                         # Add EXIF metadata to merged image
                         merged_data = add_exif_metadata(merged_data, date_str, latitude, longitude)
 
-                        output_filename = generate_filename(date_str, extension, use_timestamp_filenames, file_num)
-                        output_path = base_path / output_filename
+                        # Check for duplicates
+                        is_dup, dup_file = is_duplicate_file(merged_data, base_path, check_duplicates)
+                        if is_dup:
+                            print(f"    Skipped: Duplicate of existing file '{dup_file}'")
+                            files_saved.append({
+                                'path': dup_file,
+                                'size': len(merged_data),
+                                'type': 'duplicate',
+                                'duplicate_of': dup_file
+                            })
+                            merge_attempted = True
+                        else:
+                            output_filename = generate_filename(date_str, extension, use_timestamp_filenames, file_num)
+                            output_path = base_path / output_filename
 
-                        with open(output_path, 'wb') as f:
-                            f.write(merged_data)
+                            with open(output_path, 'wb') as f:
+                                f.write(merged_data)
 
-                        files_saved.append({
-                            'path': output_filename,
-                            'size': len(merged_data),
-                            'type': 'merged'
-                        })
-                        merge_attempted = True
+                            files_saved.append({
+                                'path': output_filename,
+                                'size': len(merged_data),
+                                'type': 'merged'
+                            })
+                            merge_attempted = True
                     except Exception as e:
                         print(f"    Warning: Failed to merge image overlay: {e}")
                         print("    Saving separate files instead...")
@@ -538,40 +551,52 @@ def download_and_extract(
                     file_data = file_info['data']
                     file_ext = file_info['ext']
 
-                    # Generate base filename, then add -main/-overlay suffix
-                    base_filename = generate_filename(date_str, file_ext, use_timestamp_filenames, file_num)
-                    base_name_no_ext = base_filename.rsplit('.', 1)[0]  # Remove extension
-
-                    if file_type == 'overlay':
-                        output_filename = f"{base_name_no_ext}-overlay{file_ext}"
-                    else:
-                        output_filename = f"{base_name_no_ext}-main{file_ext}"
-
                     # Add EXIF metadata to images (preserves original format)
                     is_image_file = file_ext.lower() in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']
                     if is_image_file:
                         file_data = add_exif_metadata(file_data, date_str, latitude, longitude)
 
-                    output_path = base_path / output_filename
+                    # Check for duplicates
+                    is_dup, dup_file = is_duplicate_file(file_data, base_path, check_duplicates)
+                    if is_dup:
+                        print(f"    Skipped: Duplicate of existing file '{dup_file}'")
+                        file_info_dict = {
+                            'path': dup_file,
+                            'size': len(file_data),
+                            'type': 'duplicate',
+                            'duplicate_of': dup_file
+                        }
+                        files_saved.append(file_info_dict)
+                    else:
+                        # Generate base filename, then add -main/-overlay suffix
+                        base_filename = generate_filename(date_str, file_ext, use_timestamp_filenames, file_num)
+                        base_name_no_ext = base_filename.rsplit('.', 1)[0]  # Remove extension
 
-                    with open(output_path, 'wb') as f:
-                        f.write(file_data)
+                        if file_type == 'overlay':
+                            output_filename = f"{base_name_no_ext}-overlay{file_ext}"
+                        else:
+                            output_filename = f"{base_name_no_ext}-main{file_ext}"
 
-                    # Set file timestamp to match original Snapchat date
-                    timestamp = parse_date_to_timestamp(date_str)
-                    set_file_timestamp(output_path, timestamp)
+                        output_path = base_path / output_filename
 
-                    file_info_dict = {
-                        'path': output_filename,
-                        'size': len(file_data),
-                        'type': file_type
-                    }
+                        with open(output_path, 'wb') as f:
+                            f.write(file_data)
 
-                    # Mark as deferred if applicable
-                    if is_deferred:
-                        file_info_dict['deferred'] = True
+                        # Set file timestamp to match original Snapchat date
+                        timestamp = parse_date_to_timestamp(date_str)
+                        set_file_timestamp(output_path, timestamp)
 
-                    files_saved.append(file_info_dict)
+                        file_info_dict = {
+                            'path': output_filename,
+                            'size': len(file_data),
+                            'type': file_type
+                        }
+
+                        # Mark as deferred if applicable
+                        if is_deferred:
+                            file_info_dict['deferred'] = True
+
+                        files_saved.append(file_info_dict)
 
     else:
         # Not a ZIP - no overlay present
@@ -589,23 +614,34 @@ def download_and_extract(
                 print(f"    First 20 bytes: {content[:20]}")
                 print("    This might be an HTML error page or expired download link")
 
-        # Save as regular file
-        output_filename = generate_filename(date_str, extension, use_timestamp_filenames, file_num)
-        output_path = base_path / output_filename
-
         # Add EXIF metadata to images
         is_image = extension.lower() in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']
         if is_image:
             content = add_exif_metadata(content, date_str, latitude, longitude)
 
-        with open(output_path, 'wb') as f:
-            f.write(content)
+        # Check for duplicates
+        is_dup, dup_file = is_duplicate_file(content, base_path, check_duplicates)
+        if is_dup:
+            print(f"    Skipped: Duplicate of existing file '{dup_file}'")
+            files_saved.append({
+                'path': dup_file,
+                'size': len(content),
+                'type': 'duplicate',
+                'duplicate_of': dup_file
+            })
+        else:
+            # Save as regular file
+            output_filename = generate_filename(date_str, extension, use_timestamp_filenames, file_num)
+            output_path = base_path / output_filename
 
-        files_saved.append({
-            'path': output_filename,
-            'size': len(content),
-            'type': 'single'
-        })
+            with open(output_path, 'wb') as f:
+                f.write(content)
+
+            files_saved.append({
+                'path': output_filename,
+                'size': len(content),
+                'type': 'single'
+            })
 
     return files_saved
 
@@ -684,6 +720,40 @@ def compute_file_hash(file_path: Path) -> str:
         for chunk in iter(lambda: f.read(8192), b''):
             md5_hash.update(chunk)
     return md5_hash.hexdigest()
+
+
+def compute_data_hash(data: bytes) -> str:
+    """Compute MD5 hash of byte data."""
+    return hashlib.md5(data).hexdigest()
+
+
+def is_duplicate_file(data: bytes, output_path: Path, check_duplicates: bool) -> tuple[bool, str | None]:
+    """
+    Check if data is a duplicate of any existing file in the output directory.
+    Returns (is_duplicate, existing_file_path)
+    """
+    if not check_duplicates:
+        return (False, None)
+
+    # Compute hash of new data
+    new_hash = compute_data_hash(data)
+    new_size = len(data)
+
+    # Check all existing files in output directory
+    for existing_file in output_path.iterdir():
+        if existing_file.is_file() and existing_file.name != 'metadata.json':
+            try:
+                existing_size = existing_file.stat().st_size
+                # Quick size check first
+                if existing_size == new_size:
+                    # Size matches, compute hash
+                    existing_hash = compute_file_hash(existing_file)
+                    if existing_hash == new_hash:
+                        return (True, existing_file.name)
+            except Exception:
+                continue
+
+    return (False, None)
 
 
 def detect_and_remove_duplicates(folder_path: Path) -> dict:
@@ -1098,7 +1168,8 @@ def download_all_memories(
     If defer_video_overlays is True, videos with overlays are saved as -main/-overlay
     files during download, then merged at the end.
 
-    If remove_duplicates is True, duplicate files are detected and removed after download.
+    If remove_duplicates is True, duplicate files are detected during download (before saving)
+    to prevent re-downloading and save bandwidth/disk space immediately.
 
     If join_multi_snaps is True, videos taken within 10 seconds are automatically joined.
     """
@@ -1181,7 +1252,8 @@ def download_all_memories(
                 defer_video_overlays,
                 metadata['date'], metadata['latitude'], metadata['longitude'],
                 overlays_only,
-                use_timestamp_filenames
+                use_timestamp_filenames,
+                remove_duplicates
             )
 
             # Check if file was skipped due to overlays_only mode
@@ -1300,9 +1372,8 @@ def download_all_memories(
     print(f"Files saved to: {output_path.absolute()}")
     print(f"Metadata saved to: {metadata_file.absolute()}")
 
-    # Remove duplicates if requested
-    if remove_duplicates:
-        detect_and_remove_duplicates(output_path)
+    # Note: Duplicate detection happens during download when --remove-duplicates is enabled
+    # This prevents re-downloading and saves bandwidth/disk space immediately
 
     # Join multi-snaps if requested
     if join_multi_snaps:
@@ -1481,7 +1552,8 @@ if __name__ == '__main__':
                     defer_video_overlays_mode,
                     metadata['date'], metadata['latitude'], metadata['longitude'],
                     False,  # overlays_only not used in test mode
-                    timestamp_filenames_mode
+                    timestamp_filenames_mode,
+                    remove_duplicates_mode
                 )
 
                 if len(files_saved) > 1:

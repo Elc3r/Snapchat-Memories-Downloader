@@ -303,20 +303,24 @@ This will name files as:
 
 ### Remove Duplicate Files
 
-Automatically detect and remove duplicate files after download:
+Automatically detect and skip duplicate files during download:
 
 ```bash
 python download_memories.py --remove-duplicates
 ```
 
 This will:
-- Calculate MD5 hash for each file
-- Group files by hash, filesize, and modification date
-- Keep the first occurrence of each duplicate
-- Delete subsequent duplicates
-- Report how much space was saved
+- Check each file before saving by calculating its MD5 hash
+- Compare against all existing files in the output directory
+- Skip saving if the file already exists (saves bandwidth and disk space)
+- Continue downloading only new, unique files
 
-**Use case:** Snapchat sometimes exports the same memory multiple times, especially if it appears in multiple albums or stories.
+**Benefits:**
+- Works during download, not after - saves time and bandwidth
+- Perfect for resuming downloads or re-running the script
+- Prevents duplicate storage even if Snapchat exports the same memory multiple times
+
+**Use case:** Snapchat sometimes exports the same memory multiple times, especially if it appears in multiple albums or stories. This flag ensures you only save each unique file once, even across multiple download runs.
 
 ### Join Multi-Snap Videos
 
