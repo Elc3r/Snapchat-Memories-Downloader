@@ -56,6 +56,7 @@ but are now separate options at the bottom of the list.
 
 - Downloads all memories from `memories_history.html`
 - Sequential naming: `01.jpg`, `02.mp4`, `03.jpg`, etc.
+- **Timestamp-based filenames** (Python) - Name files as `YYYY.MM.DD-HH:MM:SS.ext` for easy sorting by date
 - **Preserves ALL metadata**: dates, GPS coordinates, media type
 - **Embeds EXIF metadata into images** - GPS coordinates and dates show up in Photos apps
 - **Sets file timestamps to match original capture date**
@@ -64,6 +65,8 @@ but are now separate options at the bottom of the list.
   - Images: Fast, instant processing (supports JPG, PNG, WebP, GIF, BMP, TIFF)
   - Videos: Requires FFmpeg, may take 1-5 minutes per video
 - **Merge existing files** - Retroactively merge already-downloaded `-main`/`-overlay` files without re-downloading
+- **Duplicate detection** (Python) - Automatically find and remove duplicate files based on MD5 hash, filesize, and date
+- **Multi-snap joining** (Python) - Automatically detect and concatenate videos taken within 10 seconds of each other
 - Saves complete `metadata.json` with all information
 - **Resume/Retry support** - Pick up where you left off or retry failed downloads
 - Incremental metadata updates - Track download progress in real-time
@@ -259,6 +262,96 @@ This will:
 
 **Note**: To get `-main` and `-overlay` files in the first place, download without the `--merge-overlays` flag.
 
+### Custom Output Directory
+
+By default, files are saved to the `memories/` directory. You can specify a custom output directory:
+
+```bash
+python download_memories.py --output ~/Desktop/snapchat-memories
+```
+
+Or use the short form:
+
+```bash
+python download_memories.py -o /path/to/output
+```
+
+The output directory will be created automatically if it doesn't exist.
+
+**Combine with other flags:**
+```bash
+python download_memories.py -o ~/Desktop/snaps --timestamp-filenames --remove-duplicates
+```
+
+### Timestamp-Based Filenames
+
+Name files based on when they were taken instead of sequential numbers:
+
+```bash
+python download_memories.py --timestamp-filenames
+```
+
+This will name files as:
+- `2024.11.30-14:30:45.jpg`
+- `2024.12.15-09:22:13.mp4`
+- `2023.06.20-18:45:00.jpg`
+
+**Benefits:**
+- Files sort by date in file managers and photo apps
+- Easy to identify when memories were taken at a glance
+- Works with overlay files: `2024.11.30-14:30:45-main.mp4` and `2024.11.30-14:30:45-overlay.mp4`
+
+### Remove Duplicate Files
+
+Automatically detect and remove duplicate files after download:
+
+```bash
+python download_memories.py --remove-duplicates
+```
+
+This will:
+- Calculate MD5 hash for each file
+- Group files by hash, filesize, and modification date
+- Keep the first occurrence of each duplicate
+- Delete subsequent duplicates
+- Report how much space was saved
+
+**Use case:** Snapchat sometimes exports the same memory multiple times, especially if it appears in multiple albums or stories.
+
+### Join Multi-Snap Videos
+
+Automatically detect and join videos that were part of multi-snap stories:
+
+```bash
+python download_memories.py --join-multi-snaps
+```
+
+This will:
+- Group videos taken within 10 seconds of each other
+- Concatenate them into a single video using FFmpeg
+- Name the result with `-joined` suffix (e.g., `2024.11.30-14:30:45-joined.mp4`)
+- Delete the original individual videos after successful joining
+- Preserve the timestamp of the first video in the sequence
+
+**Requirements:** FFmpeg must be installed (see installation instructions above)
+
+**Use case:** When you recorded a long story as multiple 10-second snaps, this automatically stitches them back together.
+
+### Combine Multiple Features
+
+You can use multiple flags together:
+
+```bash
+# Timestamp filenames, remove duplicates, and join multi-snaps
+python download_memories.py --timestamp-filenames --remove-duplicates --join-multi-snaps
+
+# Custom output directory with all features
+python download_memories.py -o ~/Desktop/memories --timestamp-filenames --merge-overlays --join-multi-snaps
+
+# Resume download with new features
+python download_memories.py --resume --remove-duplicates
+```
+
 ### View All Options
 
 To see all available options:
@@ -277,9 +370,10 @@ deactivate
 
 ### Files
 
-- All memories are saved to the `memories/` directory
-- Named sequentially: `01.jpg`, `02.mp4`, `03.jpg`, etc.
-- Files with overlays are extracted as `XX-main.ext` and `XX-overlay.ext`
+- All memories are saved to the `memories/` directory (or custom directory specified with `--output`)
+- **Sequential naming (default)**: `01.jpg`, `02.mp4`, `03.jpg`, etc.
+- **Timestamp naming (with `--timestamp-filenames`)**: `2024.11.30-14:30:45.jpg`, `2024.12.15-09:22:13.mp4`, etc.
+- Files with overlays are extracted as `XX-main.ext` and `XX-overlay.ext` (or `YYYY.MM.DD-HH:MM:SS-main.ext` with timestamp naming)
 
 ### Metadata
 
@@ -366,9 +460,9 @@ For merged overlays (when using `--merge-overlays` flag):
 │   └── index.html               # Web version (GitHub Pages)
 ├── html/
 │   └── memories_history.html    # Snapchat export HTML file (not included)
-├── memories/                     # Downloaded files (created by script)
-│   ├── 01.mp4
-│   ├── 02.jpg
+├── memories/                     # Downloaded files (default output directory, created by script)
+│   ├── 01.mp4                    # Sequential naming (default)
+│   ├── 02.jpg                    # or 2024.11.30-14:30:45.jpg (with --timestamp-filenames)
 │   ├── 03.jpg
 │   └── metadata.json
 ├── venv/                        # Python virtual environment
