@@ -619,6 +619,31 @@
             padding-top: 20px;
             border-top: 1px solid #dee2e6;
           ">
+        <label style="
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              cursor: pointer;
+              font-size: 16px;
+            ">
+          <input type="checkbox" id="timestampFilenamesCheckbox" style="width: 18px; height: 18px; cursor: pointer" />
+          <span><strong>Timestamp-based filenames</strong></span>
+        </label>
+        <p style="
+              color: #666;
+              margin-top: 10px;
+              font-size: 14px;
+              margin-left: 28px;
+            ">
+          Name files as YYYY.MM.DD-HH:MM:SS.ext based on capture date instead of sequential numbers. Makes sorting by date easier.
+        </p>
+      </div>
+
+      <div style="
+            margin-top: 25px;
+            padding-top: 20px;
+            border-top: 1px solid #dee2e6;
+          ">
         <label style="display: block; margin-bottom: 10px; font-size: 16px"><strong>Batch Size</strong></label>
         <select id="batchSizeSelect" style="
               padding: 8px;
@@ -1101,6 +1126,38 @@
         console.error("mergeVideoOverlay error:", error);
         console.warn("Could not parse date:", dateStr, error);
         return new Date(); // Fallback to current date
+      }
+    }
+
+    /**
+     * Generate filename based on timestamp setting
+     * @param {string} dateStr - Snapchat date string (e.g., "2025-11-30 00:31:09 UTC")
+     * @param {string} extension - File extension (e.g., ".mp4")
+     * @param {boolean} useTimestamp - If true, use timestamp format; if false, use sequential number
+     * @param {string} fallbackNum - Sequential number to use if useTimestamp is false (e.g., "001")
+     * @returns {string} Filename (e.g., "2025.11.30-00:31:09.mp4" or "001.mp4")
+     */
+    function generateFilename(dateStr, extension, useTimestamp, fallbackNum) {
+      if (useTimestamp) {
+        try {
+          // Parse date string: "2025-11-30 00:31:09 UTC" -> "2025.11.30-00:31:09"
+          const dateStrClean = dateStr.replace(" UTC", "").trim();
+          const parts = dateStrClean.split(" ");
+          if (parts.length === 2) {
+            const datePart = parts[0].replace(/-/g, "."); // "2025.11.30"
+            const timePart = parts[1]; // "00:31:09"
+            return `${datePart}-${timePart}${extension}`;
+          } else {
+            // Fallback to sequential if date format is unexpected
+            console.warn(`Unexpected date format '${dateStr}', using sequential number`);
+            return `${fallbackNum}${extension}`;
+          }
+        } catch (e) {
+          console.warn(`Could not parse date for filename '${dateStr}':`, e, ', using sequential number');
+          return `${fallbackNum}${extension}`;
+        }
+      } else {
+        return `${fallbackNum}${extension}`;
       }
     }
 
@@ -1755,6 +1812,7 @@
             document.getElementById("overlaysOnlyCheckbox").checked = existingSettings.overlaysOnly || false;
             document.getElementById("videosOnlyCheckbox").checked = existingSettings.videosOnly || false;
             document.getElementById("picturesOnlyCheckbox").checked = existingSettings.picturesOnly || false;
+            document.getElementById("timestampFilenamesCheckbox").checked = existingSettings.timestampFilenames || false;
             document.getElementById("batchSizeSelect").value = existingSettings.batchSize || "50";
             document.getElementById("ffmpegResetIntervalSelect").value = existingSettings.ffmpegResetInterval || "5";
             addLog("Restored settings from metadata.json", "info");
@@ -1968,6 +2026,9 @@
       currentIndex = 0;
       deferredVideoOverlays = []; // Clear deferred videos from previous runs
 
+      // Capture timestamp filename setting
+      const useTimestampFilenames = document.getElementById("timestampFilenamesCheckbox").checked;
+
       // Initialize metadata by matching existing metadata with freshly parsed memories
       let metadataList = [];
 
@@ -2075,40 +2136,44 @@
         index: i,
       }));
 
-      // Apply media type filters
+      // First, skip successfully downloaded items (applies to all modes)
+      const beforeStatusFilter = itemsToDownload.length;
+      itemsToDownload = itemsToDownload.filter(
+        (item) =>
+          item.metadata.status !== "success" ||
+          !item.metadata.files ||
+          item.metadata.files.length === 0
+      );
+      const afterStatusFilter = itemsToDownload.length;
+
+      addLog(
+        `${afterStatusFilter} items to download (${beforeStatusFilter - afterStatusFilter} already completed)`,
+        "info"
+      );
+
+      // Then apply media type filters if enabled
       if (videosOnly) {
+        const beforeMediaFilter = itemsToDownload.length;
         itemsToDownload = itemsToDownload.filter(
           (item) => item.metadata.media_type === "Video"
         );
         addLog(
-          `Videos-only mode: ${itemsToDownload.length} videos to process`,
+          `Videos-only filter: ${itemsToDownload.length} videos to process (${beforeMediaFilter - itemsToDownload.length} pictures skipped)`,
           "info"
         );
       } else if (picturesOnly) {
+        const beforeMediaFilter = itemsToDownload.length;
         itemsToDownload = itemsToDownload.filter(
           (item) => item.metadata.media_type === "Image"
         );
         addLog(
-          `Pictures-only mode: ${itemsToDownload.length} pictures to process`,
-          "info"
-        );
-      } else {
-        // Normal mode: skip successfully downloaded items
-        itemsToDownload = itemsToDownload.filter(
-          (item) =>
-            item.metadata.status !== "success" ||
-            !item.metadata.files ||
-            item.metadata.files.length === 0
-        );
-        addLog(
-          `${itemsToDownload.length} items to download (${metadataList.length - itemsToDownload.length
-          } already completed)`,
+          `Pictures-only filter: ${itemsToDownload.length} pictures to process (${beforeMediaFilter - itemsToDownload.length} videos skipped)`,
           "info"
         );
       }
 
       if (itemsToDownload.length === 0) {
-        addLog("All memories already downloaded!", "success");
+        addLog("All applicable items already downloaded!", "success");
         status.textContent = "All downloads complete!";
         progressFill.style.width = "100%";
         progressFill.textContent = "100%";
@@ -2148,7 +2213,8 @@
             metadataList,
             batchNum + 1,
             batchStart,
-            itemsToDownload.length
+            itemsToDownload.length,
+            useTimestampFilenames
           );
         }
       } else {
@@ -2159,14 +2225,15 @@
           metadataList,
           0,
           0,
-          itemsToDownload.length
+          itemsToDownload.length,
+          useTimestampFilenames
         );
       }
 
       // Process deferred video overlays
       if (deferredVideoOverlays.length > 0) {
         addLog(`\n⏳ Processing ${deferredVideoOverlays.length} deferred video overlay(s)...`, "info");
-        await processDeferredVideoOverlays(metadataList);
+        await processDeferredVideoOverlays(metadataList, useTimestampFilenames);
       }
 
       // Final summary
@@ -2210,7 +2277,8 @@
       metadataList,
       batchNum,
       globalStartIndex,
-      totalItems
+      totalItems,
+      useTimestampFilenames
     ) {
       zip = new JSZip();
       let subBatchNum = 0;
@@ -2239,7 +2307,7 @@
         }
 
         // Process the item
-        await processItem(item, globalCount, totalItems, metadataList);
+        await processItem(item, globalCount, totalItems, metadataList, useTimestampFilenames);
         itemsInCurrentZip++;
 
         // If this was a video that needed merging, download it immediately in its own ZIP
@@ -2274,6 +2342,7 @@
         overlaysOnly: document.getElementById("overlaysOnlyCheckbox").checked,
         videosOnly: document.getElementById("videosOnlyCheckbox").checked,
         picturesOnly: document.getElementById("picturesOnlyCheckbox").checked,
+        timestampFilenames: document.getElementById("timestampFilenamesCheckbox").checked,
         batchSize: document.getElementById("batchSizeSelect").value,
         ffmpegResetInterval: document.getElementById("ffmpegResetIntervalSelect").value
       };
@@ -2357,7 +2426,7 @@
      * - 2-second pause between videos for garbage collection
      * - Memory warnings if Chrome detects >60% usage
      */
-    async function processDeferredVideoOverlays(metadataList) {
+    async function processDeferredVideoOverlays(metadataList, useTimestampFilenames) {
       const total = deferredVideoOverlays.length;
 
       for (let i = 0; i < total; i++) {
@@ -2411,7 +2480,7 @@
               overlayExt
             );
 
-            const filename = `${fileNum}${extension}`;
+            const filename = generateFilename(metadata.date, extension, useTimestampFilenames, fileNum);
 
             // Create a new ZIP for this merged video
             const videoZip = new JSZip();
@@ -2493,7 +2562,7 @@
      * Process a single item (image or video)
      * Extracted from processBatch to support smart batching
      */
-    async function processItem(batchItem, globalCount, totalItems, metadataList) {
+    async function processItem(batchItem, globalCount, totalItems, metadataList, useTimestampFilenames) {
       const { metadata, index: i } = batchItem;
       const fileNum = String(metadata.number).padStart(2, "0");
       const extension = metadata.media_type === "Video" ? ".mp4" : ".jpg";
@@ -2627,7 +2696,7 @@
                       metadata.longitude
                     );
 
-                    const filename = `${fileNum}${extension}`;
+                    const filename = generateFilename(metadata.date, extension, useTimestampFilenames, fileNum);
 
                     // Add to ZIP with original date
                     const fileDate = parseSnapchatDate(metadata.date);
@@ -2685,9 +2754,12 @@
                       const detected = detectFileExtension(new Uint8Array(fileData));
                       origExt = detected || extension;
                     }
+                    // Generate base filename and add -main/-overlay suffix
+                    const baseFilename = generateFilename(metadata.date, origExt, useTimestampFilenames, fileNum);
+                    const baseNameNoExt = baseFilename.substring(0, baseFilename.lastIndexOf('.'));
                     const newFilename = isOverlay
-                      ? `${fileNum}-overlay${origExt}`
-                      : `${fileNum}-main${origExt}`;
+                      ? `${baseNameNoExt}-overlay${origExt}`
+                      : `${baseNameNoExt}-main${origExt}`;
 
                     // Add EXIF metadata to images
                     if (metadata.media_type === "Image") {
@@ -2766,7 +2838,7 @@
                       overlayExt
                     );
 
-                    const filename = `${fileNum}${extension}`;
+                    const filename = generateFilename(metadata.date, extension, useTimestampFilenames, fileNum);
 
                     // Add to ZIP with original date
                     // Store videos uncompressed to prevent browser playback issues
@@ -2841,9 +2913,12 @@
                       const detected = detectFileExtension(new Uint8Array(fileData));
                       origExt = detected || extension;
                     }
+                    // Generate base filename and add -main/-overlay suffix
+                    const baseFilename = generateFilename(metadata.date, origExt, useTimestampFilenames, fileNum);
+                    const baseNameNoExt = baseFilename.substring(0, baseFilename.lastIndexOf('.'));
                     const newFilename = isOverlay
-                      ? `${fileNum}-overlay${origExt}`
-                      : `${fileNum}-main${origExt}`;
+                      ? `${baseNameNoExt}-overlay${origExt}`
+                      : `${baseNameNoExt}-main${origExt}`;
 
                     // Store videos uncompressed (this is video merge fallback path)
                     zip.file(newFilename, fileData, { date: fileDate, compression: "STORE" });
@@ -2879,9 +2954,12 @@
                       const detected = detectFileExtension(new Uint8Array(fileData));
                       origExt = detected || extension;
                     }
+                    // Generate base filename and add -main/-overlay suffix
+                    const baseFilename = generateFilename(metadata.date, origExt, useTimestampFilenames, fileNum);
+                    const baseNameNoExt = baseFilename.substring(0, baseFilename.lastIndexOf('.'));
                     const newFilename = isOverlay
-                      ? `${fileNum}-overlay${origExt}`
-                      : `${fileNum}-main${origExt}`;
+                      ? `${baseNameNoExt}-overlay${origExt}`
+                      : `${baseNameNoExt}-main${origExt}`;
 
                     // Add EXIF metadata to images
                     if (metadata.media_type === "Image") {
@@ -2931,7 +3009,7 @@
           } else {
             // Regular file
             let fileData = arrayBuffer;
-            const filename = `${fileNum}${extension}`;
+            const filename = generateFilename(metadata.date, extension, useTimestampFilenames, fileNum);
             const fileDate = parseSnapchatDate(metadata.date);
 
             // Add EXIF metadata to images
