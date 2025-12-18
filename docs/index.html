@@ -480,7 +480,7 @@
           Resume/Retry (Optional)
         </h4>
         <p style="color: #666; margin-bottom: 15px; font-size: 14px">
-          Upload metadata.json to resume or retry failed downloads
+          Upload metadata.json to resume or retry failed downloads (HTML file not required when resuming)
         </p>
         <input type="file" id="metadataInput" accept=".json" />
         <label for="metadataInput" class="btn" style="background: #28a745">Choose metadata.json</label>
@@ -803,8 +803,9 @@
         </h3>
         <p>
           No problem! Simply upload your metadata.json file (included in the
-          ZIP) and it will resume from where you left off. All progress is
-          saved.
+          ZIP) to resume from where you left off. You don't need to re-upload
+          the HTML file - metadata.json contains all the information needed
+          to continue. All progress is saved.
         </p>
 
         <h3 style="margin-top: 20px; color: #667eea">
@@ -1731,6 +1732,24 @@
             `Loaded metadata.json with ${existingMetadata.length} entries`,
             "success"
           );
+
+          // Enable start button for metadata-only resume (no HTML required)
+          const pending = existingMetadata.filter(m =>
+            m.status === 'pending' || m.status === 'in_progress' || m.status === 'failed'
+          ).length;
+          const success = existingMetadata.filter(m => m.status === 'success').length;
+
+          addLog(
+            `Status: ${success} completed, ${pending} to download/retry`,
+            "info"
+          );
+          addLog(
+            'Ready to resume! Click "Start Download" button when ready.',
+            "info"
+          );
+
+          // Show the start button (allow resuming without HTML)
+          startButton.style.display = "inline-block";
         } catch (error) {
           addLog(`Error loading metadata.json: ${error.message}`, "error");
           existingMetadata = null;
@@ -1924,7 +1943,21 @@
       // Initialize metadata by matching existing metadata with freshly parsed memories
       let metadataList = [];
 
-      if (!existingMetadata) {
+      // Check if we're in metadata-only mode (resume without HTML)
+      const metadataOnlyMode = existingMetadata && !memories;
+
+      if (metadataOnlyMode) {
+        // Metadata-only resume: use existing metadata directly
+        metadataList = existingMetadata;
+        addLog(
+          "Resuming from metadata.json (HTML file not required)",
+          "info"
+        );
+        addLog(
+          "Will skip successful downloads and retry failed/pending items",
+          "info"
+        );
+      } else if (!existingMetadata) {
         // No existing metadata: create new entries with pending status
         for (let i = 0; i < memories.length; i++) {
           const memory = memories[i];
@@ -2124,7 +2157,7 @@
 
       if (failed > 0 || pending > 0) {
         addLog(
-          `Tip: Download metadata.json from any batch ZIP and re-upload it to retry failed/pending items`,
+          `Tip: Upload metadata.json (no HTML required) to retry failed/pending items`,
           "info"
         );
       }
